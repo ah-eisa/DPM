@@ -18,6 +18,13 @@ describe("historical TWR",()=>{
     expect(r.twrPct).toBeCloseTo(10);expect(r.benchmarkPct).toBeCloseTo(10);expect(r.excessPct).toBeCloseTo(0);expect(r.endValue).toBeCloseTo(1100);
   });
 
+  it("includes return earned on the first observation day",()=>{
+    const s:DpmState={...base,transactions:[{...base.transactions[0],sequence:2,quantity:20,price:100,tradeDate:"2026-01-02"}],cashMovements:[{id:"m1",clientId:"c1",sequence:1,kind:"DEPOSIT",amount:1000,currency:"USD",fxRate:1,movementDate:"2026-01-02"}]};
+    const series=[h("X","USD",[["2026-01-02",110],["2026-01-05",110]]),h("SPY","USD",[["2026-01-02",100],["2026-01-05",100]])];
+    const r=calculatePerformance(s,s.clients[0],series,"2026-01-02","2026-01-05");
+    expect(r.startValue).toBeCloseTo(1000);expect(r.externalFlows).toBeCloseTo(1000);expect(r.points[0].portfolioIndex).toBeCloseTo(110);expect(r.twrPct).toBeCloseTo(10);
+  });
+
   it("removes external deposits using the beginning-of-day convention",()=>{
     const s:DpmState={...base,cashMovements:[{id:"m1",clientId:"c1",sequence:2,kind:"DEPOSIT",amount:500,currency:"USD",fxRate:1,movementDate:"2026-01-05"}]};
     const series=[h("X","USD",[["2026-01-02",50],["2026-01-05",50]]),h("SPY","USD",[["2026-01-02",100],["2026-01-05",100]])];
@@ -27,21 +34,21 @@ describe("historical TWR",()=>{
 
   it("does not report pre-period funding as a period cash flow",()=>{
     const s:DpmState={...base,cashMovements:[{id:"m0",clientId:"c1",sequence:2,kind:"DEPOSIT",amount:500,currency:"USD",fxRate:1,movementDate:"2026-01-03"}]};
-    const series=[h("X","USD",[["2026-01-05",50],["2026-01-06",50]]),h("SPY","USD",[["2026-01-05",100],["2026-01-06",100]])];
+    const series=[h("X","USD",[["2026-01-04",50],["2026-01-05",50],["2026-01-06",50]]),h("SPY","USD",[["2026-01-04",100],["2026-01-05",100],["2026-01-06",100]])];
     const r=calculatePerformance(s,s.clients[0],series,"2026-01-05","2026-01-06");
     expect(r.startValue).toBeCloseTo(1500);expect(r.externalFlows).toBe(0);expect(r.twrPct).toBeCloseTo(0);
   });
 
   it("carries a flow across a skipped valuation instead of turning it into return",()=>{
-    const s:DpmState={...base,transactions:[{...base.transactions[0],tradeDate:"2026-01-01"}],cashMovements:[{id:"m1",clientId:"c1",sequence:2,kind:"DEPOSIT",amount:500,currency:"USD",fxRate:1,movementDate:"2026-01-05"}]};
-    const series=[h("X","USD",[["2026-01-06",50],["2026-01-07",50]]),h("SPY","USD",[["2026-01-05",100],["2026-01-06",100],["2026-01-07",100]])];
+    const s:DpmState={...base,transactions:[{...base.transactions[0],sequence:2,quantity:10,price:100,tradeDate:"2026-01-05"}],cashMovements:[{id:"m1",clientId:"c1",sequence:1,kind:"DEPOSIT",amount:500,currency:"USD",fxRate:1,movementDate:"2026-01-05"}]};
+    const series=[h("X","USD",[["2026-01-06",100],["2026-01-07",100]]),h("SPY","USD",[["2026-01-05",100],["2026-01-06",100],["2026-01-07",100]])];
     const r=calculatePerformance(s,s.clients[0],series,"2026-01-05","2026-01-07");
     expect(r.externalFlows).toBeCloseTo(500);expect(r.startValue).toBeCloseTo(1000);expect(r.endValue).toBeCloseTo(1500);expect(r.twrPct).toBeCloseTo(0);expect(r.points[0].externalFlow).toBeCloseTo(500);
   });
 
   it("treats same-day funding as beginning capital when it is invested before the close",()=>{
     const s:DpmState={...base,transactions:[{...base.transactions[0],quantity:10,price:100,tradeDate:"2026-01-01"},{...base.transactions[0],id:"t2",sequence:3,quantity:10,price:100,tradeDate:"2026-01-05"}],cashMovements:[{id:"m1",clientId:"c1",sequence:2,kind:"DEPOSIT",amount:1000,currency:"USD",fxRate:1,movementDate:"2026-01-05"}]};
-    const series=[h("X","USD",[["2026-01-04",100],["2026-01-05",110]]),h("SPY","USD",[["2026-01-04",100],["2026-01-05",100]])];
+    const series=[h("X","USD",[["2026-01-03",100],["2026-01-04",100],["2026-01-05",110]]),h("SPY","USD",[["2026-01-03",100],["2026-01-04",100],["2026-01-05",100]])];
     const r=calculatePerformance(s,s.clients[0],series,"2026-01-04","2026-01-05");
     expect(r.endValue).toBeCloseTo(2200);expect(r.externalFlows).toBeCloseTo(1000);expect(r.twrPct).toBeCloseTo(10);
   });
