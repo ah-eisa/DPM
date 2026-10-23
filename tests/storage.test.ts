@@ -1,0 +1,12 @@
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { importState, loadState, recoverState, resetState, saveState, seedState } from "../lib/storage";
+let data: Map<string,string>;
+beforeEach(()=>{data=new Map();vi.stubGlobal("window",{});vi.stubGlobal("localStorage",{getItem:(k:string)=>data.get(k)??null,setItem:(k:string,v:string)=>data.set(k,v),removeItem:(k:string)=>data.delete(k)});});
+afterEach(()=>vi.unstubAllGlobals());
+it("validates and migrates the seed book",()=>expect(loadState().version).toBe(2));
+it("preserves corrupt storage without silently resetting it",()=>{data.set("dpm-desk-state-v1","broken");expect(()=>loadState()).toThrow(/not been overwritten/);expect(data.get("dpm-desk-state-v1")).toBe("broken");});
+it("retains the previous book across reset",()=>{saveState({...seedState,clients:seedState.clients.map(c=>({...c,initialCash:c.initialCash+100}))});resetState();expect(recoverState().clients[0].initialCash).toBe(seedState.clients[0].initialCash+100);});
+it("rejects invalid imports",async()=>{await expect(importState({size:10,text:async()=>'{"clients":[{}],"transactions":[],"targets":[]}'} as File)).rejects.toThrow();});
+it("rejects oversized imports",async()=>{await expect(importState({size:6000000} as File)).rejects.toThrow(/5 MB/);});
+it("does not replace a valid book with invalid data",()=>{saveState(seedState);const previous=data.get("dpm-desk-state-v1");expect(()=>saveState({...seedState,targets:[]})).toThrow();expect(data.get("dpm-desk-state-v1")).toBe(previous);});
+it("preserves the saved book when storage writes fail",()=>{saveState(seedState);const previous=data.get("dpm-desk-state-v1");vi.stubGlobal("localStorage",{getItem:(k:string)=>data.get(k)??null,setItem:()=>{throw new Error("Quota exceeded");}});expect(()=>saveState(seedState)).toThrow(/Quota/);expect(data.get("dpm-desk-state-v1")).toBe(previous);});
