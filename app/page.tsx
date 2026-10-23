@@ -3,6 +3,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { aggregateAum, buildPortfolio, driftForClient } from "@/lib/portfolio";
 import { exportState, importState, loadState, saveState, seedState, resetState, recoverState, downloadSavedBook } from "@/lib/storage";
+import { maxLedgerSequence } from "@/lib/operations";
 import { MandateForm } from "./mandate-form";
 import { orderedTrades, validateState } from "@/lib/validation";
 import { AssetClass, DpmState, Quote, Side, Transaction } from "@/lib/types";
@@ -12,9 +13,7 @@ const moneyFor = (currency: string) => new Intl.NumberFormat("en-US", { style: "
 const num = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 const pct = (value: number) => `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 
-function uid(prefix: string) {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
+function uid(prefix: string) { return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`; }
 
 export default function Home() {
   const [theme, setTheme] = useState<"dark" | "light">("dark");
@@ -109,7 +108,7 @@ export default function Home() {
     if (!trade.clientId || !trade.symbol.trim() || !Number.isFinite(quantity) || !Number.isFinite(price) || quantity <= 0 || price < 0) {setError("Enter a valid client, symbol, positive quantity and non-negative price");return;}
     const tx: Transaction = {
       id: uid("tx"),
-      sequence: trade.sequence ? Number(trade.sequence) : Math.max(0,...state.transactions.map(t => t.sequence ?? 0)) + 1,
+      sequence: trade.sequence ? Number(trade.sequence) : maxLedgerSequence(state) + 1,
       currency: trade.currency,
       clientId: trade.clientId,
       symbol: trade.symbol.trim().toUpperCase(),
@@ -146,9 +145,7 @@ export default function Home() {
       const imported = await importState(file);
       if (!window.confirm("Replace current book? Download a Backup first. The previous saved book is retained for recovery.")) return;
       adoptBook(imported);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Import failed");
-    }
+    } catch (err) { setError(err instanceof Error ? err.message : "Import failed"); }
     e.target.value = "";
   }
 
@@ -161,6 +158,7 @@ export default function Home() {
       <header className="topbar">
         <div className="brand"><div className="brandmark">D</div><div><h1>DPM Desk</h1><div className="muted small">Private portfolio operating workbench</div></div></div>
         <div className="row">
+          <a className="btn" href="/operations">Operations</a>
           <button className="btn" aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} onClick={toggleTheme}>{theme === "dark" ? "Light mode" : "Dark mode"}</button>
           <span className="status"><span className={`dot ${quoteStatus === "partial" ? "off" : ""}`} />{quoteStatus === "loading" ? "Refreshing prices" : quoteStatus === "ok" ? "Latest quotes received" : quoteStatus === "partial" ? "Partial market data" : "Local data ready"}</span>
           <button className="btn ghost" onClick={refreshQuotes}>Refresh</button>
@@ -170,9 +168,7 @@ export default function Home() {
       <div className="container">
         <div className="notice">Local-first design: client records and transactions stay in this browser. The quote endpoint receives security symbols only. Use anonymised client codes and follow your employer&apos;s information-security rules.</div>
         <div className="toolbar">
-          <div className="tabs">
-            {(["overview","portfolio","trades","rebalance"] as const).map((name) => <button key={name} className={`tab ${tab===name?"active":""}`} onClick={() => setTab(name)}>{name[0].toUpperCase()+name.slice(1)}</button>)}
-          </div>
+          <div className="tabs">{(["overview","portfolio","trades","rebalance"] as const).map((name) => <button key={name} className={`tab ${tab===name?"active":""}`} onClick={() => setTab(name)}>{name[0].toUpperCase()+name.slice(1)}</button>)}</div>
           <div className="row">
             <button className="btn" onClick={() => setSettings("new")}>+ Client</button>
             <button className="btn" onClick={() => setSettings("edit")}>Edit mandate</button>
@@ -196,73 +192,48 @@ export default function Home() {
         </section>
 
         {tab === "overview" && <div className="grid two">
-          <section className="card">
-            <div className="section-title"><h2>Client book</h2><span className="muted small">{state.clients.length} mandates</span></div>
-            <div className="client-list">{summaries.map((p) => <div key={p.client.id} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter" || e.key===" "){e.preventDefault();selectClient(p.client.id);}}} aria-pressed={p.client.id===active.client.id} className={`client ${p.client.id===active.client.id?"active":""}`} onClick={() => selectClient(p.client.id)}>
-              <div className="client-top"><div><div className="client-code">{p.client.code}</div><div className="muted small">{p.client.label}</div></div><span className="pill">{p.client.riskProfile}</span></div>
-              <div style={{marginTop:14,fontSize:20,fontWeight:800}}>{moneyFor(p.client.baseCurrency).format(p.marketValue)}</div>
-              <div className="row small" style={{marginTop:7,justifyContent:"space-between"}}><span className="muted">Day {p.dayPnlComplete ? moneyFor(p.client.baseCurrency).format(p.dayPnl) : "Unavailable"}</span><span className={p.totalPnl>=0?"positive":"negative"}>P&L {p.valuationComplete ? moneyFor(p.client.baseCurrency).format(p.totalPnl) : "Unavailable"}</span></div>
-            </div>)}</div>
-          </section>
-          <section className="card">
-            <div className="section-title"><h2>{active.client.code} allocation</h2><span className="pill">{active.client.benchmark}</span></div>
-            <div className="allocation">{Object.entries(active.allocation).sort((a,b)=>b[1]-a[1]).map(([key,value]) => <div className="alloc-row" key={key}><span>{key}</span><div className="bar"><span style={{width:`${Math.max(0,Math.min(100,value))}%`}} /></div><span className="right">{value.toFixed(1)}%</span></div>)}</div>
-          </section>
-          <section className="card full">
-            <div className="section-title"><h2>{active.client.code} holdings</h2><span className="muted small">{active.holdings.length} securities</span></div>
-            <HoldingsTable holdings={active.holdings} quotes={quotes} baseCurrency={active.client.baseCurrency} />
-          </section>
+          <section className="card"><div className="section-title"><h2>Client book</h2><span className="muted small">{state.clients.length} mandates</span></div><div className="client-list">{summaries.map((p) => <div key={p.client.id} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter" || e.key===" "){e.preventDefault();selectClient(p.client.id);}}} aria-pressed={p.client.id===active.client.id} className={`client ${p.client.id===active.client.id?"active":""}`} onClick={() => selectClient(p.client.id)}><div className="client-top"><div><div className="client-code">{p.client.code}</div><div className="muted small">{p.client.label}</div></div><span className="pill">{p.client.riskProfile}</span></div><div style={{marginTop:14,fontSize:20,fontWeight:800}}>{moneyFor(p.client.baseCurrency).format(p.marketValue)}</div><div className="row small" style={{marginTop:7,justifyContent:"space-between"}}><span className="muted">Day {p.dayPnlComplete ? moneyFor(p.client.baseCurrency).format(p.dayPnl) : "Unavailable"}</span><span className={p.totalPnl>=0?"positive":"negative"}>P&L {p.valuationComplete ? moneyFor(p.client.baseCurrency).format(p.totalPnl) : "Unavailable"}</span></div></div>)}</div></section>
+          <section className="card"><div className="section-title"><h2>{active.client.code} allocation</h2><span className="pill">{active.client.benchmark}</span></div><div className="allocation">{Object.entries(active.allocation).sort((a,b)=>b[1]-a[1]).map(([key,value]) => <div className="alloc-row" key={key}><span>{key}</span><div className="bar"><span style={{width:`${Math.max(0,Math.min(100,value))}%`}} /></div><span className="right">{value.toFixed(1)}%</span></div>)}</div></section>
+          <section className="card full"><div className="section-title"><h2>{active.client.code} holdings</h2><span className="muted small">{active.holdings.length} securities</span></div><HoldingsTable holdings={active.holdings} quotes={quotes} baseCurrency={active.client.baseCurrency} /></section>
         </div>}
 
         {tab === "portfolio" && <div className="grid two">
-          <section className="card">
-            <div className="section-title"><h2>Portfolio snapshot</h2><span className="pill">{active.client.riskProfile}</span></div>
-            <table><tbody>
-              <Metric label="Market value" value={money.format(active.marketValue)} />
-              <Metric label="Invested" value={money.format(active.investedValue)} />
-              <Metric label="Cash" value={money.format(active.cash)} />
-              <Metric label="Cost basis" value={money.format(active.costBasis)} />
-              <Metric label="Realised P&L" value={money.format(active.realisedPnl)} />
-              <Metric label="Unrealised P&L" value={active.valuationComplete ? money.format(active.unrealisedPnl) : "Unavailable"} />
-            </tbody></table>
-          </section>
-          <section className="card">
-            <div className="section-title"><h2>Mandate targets</h2><span className="muted small">Use Edit mandate to update all limits</span></div>
-            <table><thead><tr><th>Asset class</th><th className="right">Target</th><th className="right">Actual</th><th className="right">Drift</th></tr></thead><tbody>{activeDrift.map((d)=><tr key={d.assetClass}><td>{d.assetClass}</td><td className="right">{d.targetPct.toFixed(1)}%</td><td className="right">{d.actualPct.toFixed(1)}%</td><td className={`right ${Math.abs(d.driftPct)>5?"negative":""}`}>{pct(d.driftPct)}</td></tr>)}</tbody></table>
-          </section>
+          <section className="card"><div className="section-title"><h2>Portfolio snapshot</h2><span className="pill">{active.client.riskProfile}</span></div><table><tbody>
+            <Metric label="Market value" value={money.format(active.marketValue)} />
+            <Metric label="Invested" value={money.format(active.investedValue)} />
+            <Metric label="Cash" value={money.format(active.cash)} />
+            <Metric label="Cost basis" value={money.format(active.costBasis)} />
+            <Metric label="Realised P&L" value={money.format(active.realisedPnl)} />
+            <Metric label="Net income / fees" value={money.format(active.incomePnl)} />
+            <Metric label="Unrealised P&L" value={active.valuationComplete ? money.format(active.unrealisedPnl) : "Unavailable"} />
+            <Metric label="Total P&L" value={active.valuationComplete ? money.format(active.totalPnl) : "Unavailable"} />
+            <Metric label="External cash flow" value={money.format(active.externalCashFlow)} />
+          </tbody></table></section>
+          <section className="card"><div className="section-title"><h2>Mandate targets</h2><span className="muted small">Use Edit mandate to update all limits</span></div><table><thead><tr><th>Asset class</th><th className="right">Target</th><th className="right">Actual</th><th className="right">Drift</th></tr></thead><tbody>{activeDrift.map((d)=><tr key={d.assetClass}><td>{d.assetClass}</td><td className="right">{d.targetPct.toFixed(1)}%</td><td className="right">{d.actualPct.toFixed(1)}%</td><td className={`right ${Math.abs(d.driftPct)>5?"negative":""}`}>{pct(d.driftPct)}</td></tr>)}</tbody></table></section>
           <section className="card full"><div className="section-title"><h2>Holdings</h2><span className="muted small">FIFO cost basis</span></div><HoldingsTable holdings={active.holdings} quotes={quotes} baseCurrency={active.client.baseCurrency}/></section>
         </div>}
 
         {tab === "trades" && <div className="grid two">
-          <section className="card">
-            <div className="section-title"><h2>Capture execution</h2><span className="pill">GTN reference optional</span></div>
-            <form className="form-grid" onSubmit={addTrade}>
-              <Field label="Client"><select value={trade.clientId} onChange={(e)=>setTrade({...trade,clientId:e.target.value,currency:state.clients.find(c=>c.id===e.target.value)?.baseCurrency ?? "USD",fxRate:"1"})}>{state.clients.map(c=><option key={c.id} value={c.id}>{c.code}</option>)}</select></Field>
-              <Field label="Side"><select value={trade.side} onChange={(e)=>setTrade({...trade,side:e.target.value as Side})}><option>BUY</option><option>SELL</option></select></Field>
-              <Field label="Symbol"><input required value={trade.symbol} onChange={(e)=>setTrade({...trade,symbol:e.target.value})} placeholder="NVDA" /></Field>
-              <Field label="Asset class"><select value={trade.assetClass} onChange={(e)=>setTrade({...trade,assetClass:e.target.value as AssetClass})}>{ASSET_CLASSES.filter(x=>x!=="Cash").map(x=><option key={x}>{x}</option>)}</select></Field>
-              <Field label="Quantity"><input required type="number" step="any" value={trade.quantity} onChange={(e)=>setTrade({...trade,quantity:e.target.value})} /></Field>
-              <Field label="Execution price"><input required type="number" step="any" value={trade.price} onChange={(e)=>setTrade({...trade,price:e.target.value})} /></Field>
-              <Field label="Fees"><input type="number" step="any" value={trade.fees} onChange={(e)=>setTrade({...trade,fees:e.target.value})} /></Field>
-              <Field label="Quote currency"><input required maxLength={3} value={trade.currency} onChange={e=>setTrade({...trade,currency:e.target.value.toUpperCase()})}/></Field>
-              <Field label="Execution sequence (optional)"><input type="number" min="1" step="1" value={trade.sequence} onChange={e=>setTrade({...trade,sequence:e.target.value})} placeholder="Auto: after existing trades"/></Field>
-              <Field label="FX rate to base"><input type="number" step="any" value={trade.fxRate} onChange={(e)=>setTrade({...trade,fxRate:e.target.value})} /></Field>
-              <Field label="Trade date"><input type="date" value={trade.tradeDate} onChange={(e)=>setTrade({...trade,tradeDate:e.target.value})} /></Field>
-              <Field label="GTN ref"><input value={trade.gtnRef} onChange={(e)=>setTrade({...trade,gtnRef:e.target.value})} placeholder="optional" /></Field>
-              <Field label="Security name"><input value={trade.name} onChange={(e)=>setTrade({...trade,name:e.target.value})} placeholder="optional" /></Field>
-              <div className="field" style={{alignSelf:"end"}}><button className="btn primary" type="submit">Add execution</button></div>
-            </form>
-          </section>
-          <section className="card">
-            <div className="section-title"><h2>{active.client.code} transaction blotter</h2><span className="muted small">{clientTrades.length} rows</span></div>
-            <table><thead><tr><th>Date / sequence</th><th>Side</th><th>Symbol</th><th className="right">Qty</th><th className="right">Price</th><th>Ref</th><th></th></tr></thead><tbody>{clientTrades.map(t=><tr key={t.id}><td>{t.tradeDate} / {t.sequence}</td><td><span className={`pill ${t.side==="BUY"?"good":"warn"}`}>{t.side}</span></td><td className="mono">{t.symbol}</td><td className="right">{num.format(t.quantity)}</td><td className="right">{num.format(t.price)}</td><td className="muted">{t.gtnRef||"-"}</td><td className="right"><button className="btn danger" aria-label={`Delete ${t.symbol} execution ${t.sequence}`} onClick={()=>deleteTrade(t.id)}>Delete</button></td></tr>)}</tbody></table>
-          </section>
+          <section className="card"><div className="section-title"><h2>Capture execution</h2><span className="pill">GTN reference optional</span></div><form className="form-grid" onSubmit={addTrade}>
+            <Field label="Client"><select value={trade.clientId} onChange={(e)=>setTrade({...trade,clientId:e.target.value,currency:state.clients.find(c=>c.id===e.target.value)?.baseCurrency ?? "USD",fxRate:"1"})}>{state.clients.map(c=><option key={c.id} value={c.id}>{c.code}</option>)}</select></Field>
+            <Field label="Side"><select value={trade.side} onChange={(e)=>setTrade({...trade,side:e.target.value as Side})}><option>BUY</option><option>SELL</option></select></Field>
+            <Field label="Symbol"><input required value={trade.symbol} onChange={(e)=>setTrade({...trade,symbol:e.target.value})} placeholder="NVDA" /></Field>
+            <Field label="Asset class"><select value={trade.assetClass} onChange={(e)=>setTrade({...trade,assetClass:e.target.value as AssetClass})}>{ASSET_CLASSES.filter(x=>x!=="Cash").map(x=><option key={x}>{x}</option>)}</select></Field>
+            <Field label="Quantity"><input required type="number" step="any" value={trade.quantity} onChange={(e)=>setTrade({...trade,quantity:e.target.value})} /></Field>
+            <Field label="Execution price"><input required type="number" step="any" value={trade.price} onChange={(e)=>setTrade({...trade,price:e.target.value})} /></Field>
+            <Field label="Fees"><input type="number" step="any" value={trade.fees} onChange={(e)=>setTrade({...trade,fees:e.target.value})} /></Field>
+            <Field label="Quote currency"><input required maxLength={3} value={trade.currency} onChange={e=>setTrade({...trade,currency:e.target.value.toUpperCase()})}/></Field>
+            <Field label="Execution sequence (optional)"><input type="number" min="1" step="1" value={trade.sequence} onChange={e=>setTrade({...trade,sequence:e.target.value})} placeholder="Auto: after all ledger events"/></Field>
+            <Field label="FX rate to base"><input type="number" step="any" value={trade.fxRate} onChange={(e)=>setTrade({...trade,fxRate:e.target.value})} /></Field>
+            <Field label="Trade date"><input type="date" value={trade.tradeDate} onChange={(e)=>setTrade({...trade,tradeDate:e.target.value})} /></Field>
+            <Field label="GTN ref"><input value={trade.gtnRef} onChange={(e)=>setTrade({...trade,gtnRef:e.target.value})} placeholder="optional" /></Field>
+            <Field label="Security name"><input value={trade.name} onChange={(e)=>setTrade({...trade,name:e.target.value})} placeholder="optional" /></Field>
+            <div className="field" style={{alignSelf:"end"}}><button className="btn primary" type="submit">Add execution</button></div>
+          </form></section>
+          <section className="card"><div className="section-title"><h2>{active.client.code} transaction blotter</h2><span className="muted small">{clientTrades.length} rows</span></div><table><thead><tr><th>Date / sequence</th><th>Side</th><th>Symbol</th><th className="right">Qty</th><th className="right">Price</th><th>Ref</th><th></th></tr></thead><tbody>{clientTrades.map(t=><tr key={t.id}><td>{t.tradeDate} / {t.sequence}</td><td><span className={`pill ${t.side==="BUY"?"good":"warn"}`}>{t.side}</span></td><td className="mono">{t.symbol}</td><td className="right">{num.format(t.quantity)}</td><td className="right">{num.format(t.price)}</td><td className="muted">{t.gtnRef||"-"}</td><td className="right"><button className="btn danger" aria-label={`Delete ${t.symbol} execution ${t.sequence}`} onClick={()=>deleteTrade(t.id)}>Delete</button></td></tr>)}</tbody></table></section>
         </div>}
 
-        {tab === "rebalance" && <section className="card">
-          <div className="section-title"><h2>{active.client.code} rebalance worksheet</h2><span className="muted small">Target value minus current value</span></div>
-          <table><thead><tr><th>Asset class</th><th className="right">Target</th><th className="right">Actual</th><th className="right">Drift</th><th className="right">Indicative action</th><th>Status</th></tr></thead><tbody>{activeDrift.map(d=><tr key={d.assetClass}><td>{d.assetClass}</td><td className="right">{d.targetPct.toFixed(1)}%</td><td className="right">{d.actualPct.toFixed(1)}%</td><td className={`right ${d.breach?"negative":""}`}>{pct(d.driftPct)}</td><td className={`right ${d.tradeValue>=0?"positive":"negative"}`}>{d.tradeValue>=0?"BUY ":"SELL "}{money.format(Math.abs(d.tradeValue))}</td><td>{!active.valuationComplete?<span className="pill warn">REVIEW PRICES</span>:d.breach?<span className="pill warn">BREACH</span>:<span className="pill good">IN RANGE</span>}</td></tr>)}</tbody></table>
-        </section>}
+        {tab === "rebalance" && <section className="card"><div className="section-title"><h2>{active.client.code} rebalance worksheet</h2><span className="muted small">Target value minus current value</span></div><table><thead><tr><th>Asset class</th><th className="right">Target</th><th className="right">Actual</th><th className="right">Drift</th><th className="right">Indicative action</th><th>Status</th></tr></thead><tbody>{activeDrift.map(d=><tr key={d.assetClass}><td>{d.assetClass}</td><td className="right">{d.targetPct.toFixed(1)}%</td><td className="right">{d.actualPct.toFixed(1)}%</td><td className={`right ${d.breach?"negative":""}`}>{pct(d.driftPct)}</td><td className={`right ${d.tradeValue>=0?"positive":"negative"}`}>{d.tradeValue>=0?"BUY ":"SELL "}{money.format(Math.abs(d.tradeValue))}</td><td>{!active.valuationComplete?<span className="pill warn">REVIEW PRICES</span>:d.breach?<span className="pill warn">BREACH</span>:<span className="pill good">IN RANGE</span>}</td></tr>)}</tbody></table></section>}
       </div>
     </main>
   );
