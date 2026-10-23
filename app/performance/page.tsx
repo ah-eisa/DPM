@@ -10,6 +10,7 @@ const money=(ccy:string,n:number)=>new Intl.NumberFormat("en-US",{style:"currenc
 const today=()=>new Date().toISOString().slice(0,10);
 const esc=(value:unknown)=>String(value).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]!));
 function startFor(range:string){const d=new Date();if(range==="YTD")return `${d.getUTCFullYear()}-01-01`;const years=range.endsWith("Y")?Number(range.slice(0,-1)):0;const months=range.endsWith("M")?Number(range.slice(0,-1)):0;if(years)d.setUTCFullYear(d.getUTCFullYear()-years);if(months)d.setUTCMonth(d.getUTCMonth()-months);return d.toISOString().slice(0,10);}
+function historyStartFor(start:string){const d=new Date(`${start}T00:00:00Z`);d.setUTCDate(d.getUTCDate()-7);return d.toISOString().slice(0,10);}
 
 export default function PerformancePage(){
   const [state,setState]=useState<DpmState>(seedState);const [ready,setReady]=useState(false);const [error,setError]=useState("");const [clientId,setClientId]=useState("c001");const [range,setRange]=useState("1Y");const [result,setResult]=useState<PerformanceResult|null>(null);const [status,setStatus]=useState("");
@@ -23,13 +24,14 @@ export default function PerformancePage(){
     const id=++requestId.current;
     controller.current?.abort();
     const abort=new AbortController();controller.current=abort;
-    const timeout=window.setTimeout(()=>abort.abort(),60000);
+    let timedOut=false;
+    const timeout=window.setTimeout(()=>{timedOut=true;abort.abort();},60000);
     setError("");setStatus("Loading historical prices...");setResult(null);
     try{
       if(!symbols.length)throw new Error("This client has no securities or benchmark symbols");
       if(symbols.length>25)throw new Error("Performance workspace supports up to 25 market symbols per client");
-      const start=startFor(range),end=today();
-      const r=await fetch(`/api/history?symbols=${encodeURIComponent(symbols.join(","))}&start=${start}&end=${end}&base=${client.baseCurrency}`,{cache:"no-store",signal:abort.signal});
+      const start=startFor(range),historyStart=historyStartFor(start),end=today();
+      const r=await fetch(`/api/history?symbols=${encodeURIComponent(symbols.join(","))}&start=${historyStart}&end=${end}&base=${client.baseCurrency}`,{cache:"no-store",signal:abort.signal});
       const data=await r.json();if(!r.ok)throw new Error(data.error??"Historical data request failed");
       const series=Object.values(data.series??{}) as HistorySeries[];
       const perf=calculatePerformance(state,client,series,start,end);
@@ -38,7 +40,9 @@ export default function PerformancePage(){
       const failures=Object.keys(data.errors??{}).length;
       setStatus(`${perf.points.length} observations / ${data.interval}${failures?` / ${failures} provider warning(s)`:""}`);
     }catch(e){
-      if(id!==requestId.current||abort.signal.aborted)return;
+      if(id!==requestId.current)return;
+      if(timedOut){setError("Historical data request timed out after 60 seconds");setStatus("");return;}
+      if(abort.signal.aborted)return;
       setError(e instanceof Error?e.message:"Performance calculation failed");setStatus("");
     }finally{window.clearTimeout(timeout);if(controller.current===abort)controller.current=null;}
   }
@@ -50,7 +54,7 @@ export default function PerformancePage(){
   if(!ready||!client)return <main className="app"><div className="container"><h1>Performance</h1><p role="alert">{error||"Loading book..."}</p><a className="btn" href="/">Dashboard</a></div></main>;
   return <main className="app"><header className="topbar"><div className="brand"><div className="brandmark">P</div><div><h1>Performance & Reports</h1><div className="muted small">TWR, benchmark comparison and client-ready export</div></div></div><div className="row"><a className="btn" href="/">Dashboard</a><a className="btn" href="/operations">Operations</a></div></header><div className="container">
     <div className="toolbar"><div className="row"><label className="field">Client<select value={client.id} onChange={e=>setClientId(e.target.value)}>{state.clients.map(c=><option key={c.id} value={c.id}>{c.code} / {c.baseCurrency}</option>)}</select></label><label className="field">Period<select value={range} onChange={e=>setRange(e.target.value)}>{["1M","3M","YTD","1Y","3Y","5Y","10Y"].map(x=><option key={x}>{x}</option>)}</select></label><button className="btn primary" onClick={run}>Refresh history</button></div><div className="row"><button className="btn" disabled={!result} onClick={exportCsv}>Export CSV</button><button className="btn" disabled={!result} onClick={exportHtml}>Printable report</button></div></div>
-    <div className="notice">Portfolio TWR uses raw historical closes together with recorded corporate actions and cash income. External deposits/withdrawals use a beginning-of-day convention. Benchmarks use adjusted closes when available, independently of the portfolio ledger. Missing valuation dates do not discard cash flows.</div>{error&&<div className="notice negative" role="alert">{error}</div>}{status&&<div className="muted small" style={{marginBottom:12}}>{status}</div>}
+    <div className="notice">Portfolio TWR uses a pre-period market anchor plus raw historical closes and recorded corporate actions, so the first sub-period return is included. External deposits/withdrawals use a beginning-of-day convention. Benchmarks use adjusted closes when available. Missing valuation dates do not discard cash flows.</div>{error&&<div className="notice negative" role="alert">{error}</div>}{status&&<div className="muted small" style={{marginBottom:12}}>{status}</div>}
     {result&&<><section className="grid kpis"><K label="Portfolio TWR" value={pct(result.twrPct)} tone={result.twrPct>=0?"positive":"negative"}/><K label="Benchmark" value={pct(result.benchmarkPct)} tone={(result.benchmarkPct??0)>=0?"positive":"negative"}/><K label="Excess return" value={pct(result.excessPct)} tone={(result.excessPct??0)>=0?"positive":"negative"}/><K label="End value" value={money(client.baseCurrency,result.endValue)}/><K label="External flows" value={money(client.baseCurrency,result.externalFlows)}/></section><div className="grid two"><section className="card full"><div className="section-title"><h2>Growth of 100</h2><span className="pill">vs {result.benchmarkLabel}</span></div><Chart result={result}/></section><section className="card"><div className="section-title"><h2>Performance reconciliation</h2></div><table><tbody><tr><td>Start value before first-period flow</td><td className="right">{money(client.baseCurrency,result.startValue)}</td></tr><tr><td>External flows</td><td className="right">{money(client.baseCurrency,result.externalFlows)}</td></tr><tr><td>End value</td><td className="right">{money(client.baseCurrency,result.endValue)}</td></tr><tr><td>Flow convention</td><td className="right">Beginning of day</td></tr><tr><td>TWR</td><td className="right">{pct(result.twrPct)}</td></tr><tr><td>Benchmark</td><td className="right">{pct(result.benchmarkPct)}</td></tr><tr><td>Excess</td><td className="right">{pct(result.excessPct)}</td></tr></tbody></table></section><section className="card"><div className="section-title"><h2>Mandate context</h2></div><table><tbody><tr><td>Client</td><td className="right">{client.code}</td></tr><tr><td>Risk</td><td className="right">{client.riskProfile}</td></tr><tr><td>Base currency</td><td className="right">{client.baseCurrency}</td></tr><tr><td>Benchmark</td><td className="right">{client.benchmark}</td></tr><tr><td>Observations</td><td className="right">{result.points.length}</td></tr></tbody></table></section></div></>}
   </div></main>;
 }
