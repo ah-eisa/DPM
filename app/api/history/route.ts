@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { guardMarketApi } from "@/lib/api-guard";
 import { HistoryInterval, marketDataProvider, MarketHistorySeries } from "@/lib/market-data";
 import { currency } from "@/lib/validation";
 
@@ -14,6 +15,9 @@ function parseDate(value: string | null, name: string) {
 }
 
 export async function GET(request:NextRequest){
+  const guard = guardMarketApi(request, "history", 30);
+  if (!guard.ok) return NextResponse.json({error:guard.error},{status:guard.status,headers:guard.headers});
+
   try{
     const raw=(request.nextUrl.searchParams.get("symbols")??"").toUpperCase();
     const symbols=Array.from(new Set(raw.split(",").map(x=>x.trim()).filter(Boolean)));
