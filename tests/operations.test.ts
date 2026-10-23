@@ -6,8 +6,8 @@ import { validateState } from "../lib/validation";
 const base: DpmState = {
   version:3,
   clients:[
-    {id:"c1",code:"C001",label:"One",baseCurrency:"USD",benchmark:"SPY",riskProfile:"Balanced",initialCash:10000},
-    {id:"c2",code:"C002",label:"Two",baseCurrency:"USD",benchmark:"SPY",riskProfile:"Balanced",initialCash:10000},
+    {id:"c1",code:"C001",label:"One",baseCurrency:"USD",benchmark:"SPY",riskProfile:"Balanced",initialCash:100000},
+    {id:"c2",code:"C002",label:"Two",baseCurrency:"USD",benchmark:"SPY",riskProfile:"Balanced",initialCash:100000},
   ],
   transactions:[],cashMovements:[],corporateActions:[],
   targets:[{clientId:"c1",assetClass:"Cash",targetPct:100},{clientId:"c2",assetClass:"Cash",targetPct:100}],
