@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { allocateMasterExecution, importGtnCsv, maxLedgerSequence } from "../lib/operations";
 import { DpmState } from "../lib/types";
@@ -28,6 +29,16 @@ describe("GTN CSV import",()=>{
   it("imports common GTN-style headers and validates rows",()=>{
     const csv=`Client,Side,Symbol,Quantity,Price,Commission,Currency,FX Rate,Trade Date,GTN Ref,Asset Class,Security Name\nC001,BUY,AAPL,10,200,5,USD,1,2026-10-23,REF-1,US Equity,Apple\nC002,B,SPY,2,700,1,USD,1,2026-10-23,REF-2,ETF,SPDR S&P 500 ETF`;
     const txs=importGtnCsv(csv,base);expect(txs).toHaveLength(2);expect(txs[0]).toMatchObject({clientId:"c1",symbol:"AAPL",fees:5,gtnRef:"REF-1",assetClass:"US Equity"});expect(txs[1]).toMatchObject({clientId:"c2",side:"BUY",symbol:"SPY",assetClass:"ETF"});
+  });
+  it("imports the repository GTN demo fixture end-to-end",()=>{
+    const csv=readFileSync(new URL("../examples/gtn-demo.csv",import.meta.url),"utf8");
+    const txs=importGtnCsv(csv,base);
+    expect(txs).toHaveLength(8);
+    expect(txs.map(t=>t.gtnRef)).toEqual([
+      "GTN-DEMO-100001","GTN-DEMO-100002","GTN-DEMO-100003","GTN-DEMO-100004",
+      "GTN-DEMO-100005","GTN-DEMO-100006","GTN-DEMO-100007","GTN-DEMO-100008"
+    ]);
+    expect(()=>validateState({...base,transactions:txs})).not.toThrow();
   });
   it("parses quoted CSV fields containing commas",()=>{const csv=`Account,Side,Ticker,Qty,Price,Date,Name\nC001,BUY,AAPL,1,200,2026-10-23,"Apple, Inc."`;expect(importGtnCsv(csv,base)[0].name).toBe("Apple, Inc.");});
   it("rejects unknown client codes",()=>{const csv=`Client,Side,Symbol,Quantity,Price,Trade Date\nC999,BUY,AAPL,1,200,2026-10-23`;expect(()=>importGtnCsv(csv,base)).toThrow(/unknown client/);});
