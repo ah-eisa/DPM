@@ -4,7 +4,7 @@ import { currency } from "@/lib/validation";
 export const dynamic = "force-dynamic";
 const SYMBOL_RE = /^[A-Z0-9^][A-Z0-9.^=\-]{0,39}$/;
 
-type Point = { date: string; close: number };
+type Point = { date: string; close: number; adjustedClose?: number };
 type Series = { symbol: string; currency: string; points: Point[] };
 
 function parseDate(value: string | null, name: string) {
@@ -25,11 +25,18 @@ async function yahoo(symbol: string, start: number, end: number, interval: strin
   const ccy = rawCurrency === "GBp" || rawCurrency === "GBX" ? "GBP" : rawCurrency === "ZAc" ? "ZAR" : currency(rawCurrency);
   const divisor = rawCurrency === "GBp" || rawCurrency === "GBX" || rawCurrency === "ZAc" ? 100 : 1;
   const ts=result.timestamp??[];
-  const closes=result.indicators?.adjclose?.[0]?.adjclose ?? result.indicators?.quote?.[0]?.close ?? [];
+  const raw=result.indicators?.quote?.[0]?.close ?? [];
+  const adjusted=result.indicators?.adjclose?.[0]?.adjclose ?? [];
   const points:Point[]=[];
-  for(let i=0;i<Math.min(ts.length,closes.length);i++){
-    const close=closes[i]; if(typeof close!=="number" || !Number.isFinite(close) || close<=0) continue;
-    points.push({date:new Date(ts[i]*1000).toISOString().slice(0,10),close:close/divisor});
+  for(let i=0;i<Math.min(ts.length,raw.length);i++){
+    const close=raw[i];
+    if(typeof close!=="number" || !Number.isFinite(close) || close<=0) continue;
+    const adj=adjusted[i];
+    points.push({
+      date:new Date(ts[i]*1000).toISOString().slice(0,10),
+      close:close/divisor,
+      ...(typeof adj==="number" && Number.isFinite(adj) && adj>0 ? {adjustedClose:adj/divisor} : {})
+    });
   }
   if(!points.length) throw new Error("No historical prices");
   return {symbol,currency:ccy,points};
@@ -57,6 +64,6 @@ export async function GET(request:NextRequest){
       for(const s of Object.values(output)) if(s.currency!==base) pairs.add(`${s.currency}${base}=X`);
       for(const pair of pairs) if(!output[pair]) try{output[pair]=await yahoo(pair,start,end,interval);}catch(e){errors[pair]=e instanceof Error?e.message:"FX history unavailable";}
     }
-    return NextResponse.json({series:output,errors,interval},{headers:{"Cache-Control":"private, max-age=300"}});
+    return NextResponse.json({series:output,errors,interval,priceModel:{portfolio:"raw-close",benchmark:"adjusted-close-when-available"}},{headers:{"Cache-Control":"private, max-age=300"}});
   }catch(e){return NextResponse.json({error:e instanceof Error?e.message:"Invalid history request"},{status:400});}
 }
