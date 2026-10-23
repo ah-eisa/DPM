@@ -9,6 +9,8 @@ export type AssetClass =
   | "Other";
 
 export type Side = "BUY" | "SELL";
+export type CashMovementKind = "DEPOSIT" | "WITHDRAWAL" | "DIVIDEND" | "COUPON" | "INTEREST" | "FEE" | "TAX" | "OTHER";
+export type CorporateActionKind = "SPLIT" | "REVERSE_SPLIT" | "STOCK_DIVIDEND";
 
 export interface Client {
   id: string;
@@ -38,6 +40,32 @@ export interface Transaction {
   notes?: string;
 }
 
+export interface CashMovement {
+  id: string;
+  clientId: string;
+  sequence: number;
+  kind: CashMovementKind;
+  amount: number;
+  currency: string;
+  fxRate: number;
+  movementDate: string;
+  symbol?: string;
+  reference?: string;
+  notes?: string;
+}
+
+export interface CorporateAction {
+  id: string;
+  clientId: string;
+  sequence: number;
+  kind: CorporateActionKind;
+  symbol: string;
+  actionDate: string;
+  factor: number;
+  reference?: string;
+  notes?: string;
+}
+
 export interface TargetAllocation {
   clientId: string;
   assetClass: AssetClass;
@@ -62,6 +90,8 @@ export interface DpmState {
   version?: number;
   clients: Client[];
   transactions: Transaction[];
+  cashMovements: CashMovement[];
+  corporateActions: CorporateAction[];
   targets: TargetAllocation[];
 }
 
@@ -92,6 +122,8 @@ export interface PortfolioSummary {
   marketValue: number;
   costBasis: number;
   realisedPnl: number;
+  incomePnl: number;
+  externalCashFlow: number;
   unrealisedPnl: number;
   totalPnl: number;
   dayPnl: number;

@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { aggregateAum, buildPortfolio, driftForClient } from "../lib/portfolio";
 import { validateState } from "../lib/validation";
-import { Client, DpmState, Quote, Transaction } from "../lib/types";
+import { CashMovement, Client, CorporateAction, DpmState, Quote, Transaction } from "../lib/types";
 
 const client: Client = { id:"c", code:"C", label:"Test", baseCurrency:"USD", initialCash:10000, benchmark:"SPY", riskProfile:"Balanced" };
 const trade = (side: "BUY"|"SELL", quantity:number, price:number, sequence=1, extra:Partial<Transaction>={}):Transaction => ({id:`t${sequence}`,clientId:"c",symbol:"X",assetClass:"ETF",side,quantity,price,fees:0,fxRate:1,currency:"USD",tradeDate:"2026-10-01",sequence,...extra});
-const state = (transactions:Transaction[]=[]):DpmState => ({version:2,clients:[{...client}],transactions,targets:[{clientId:"c",assetClass:"Cash",targetPct:100}]});
+const state = (transactions:Transaction[]=[], cashMovements:CashMovement[]=[], corporateActions:CorporateAction[]=[]):DpmState => ({version:3,clients:[{...client}],transactions,cashMovements,corporateActions,targets:[{clientId:"c",assetClass:"Cash",targetPct:100}]});
 const quote = (price:number, currency="USD"):Quote => ({symbol:"X",price,currency,asOf:new Date().toISOString(),source:"Test",previousClose:price-1});
-const summary = (trades:Transaction[], quotes:Record<string,Quote>={}) => buildPortfolio(client,state(trades),quotes);
+const summary = (trades:Transaction[], quotes:Record<string,Quote>={}, cash:CashMovement[]=[], actions:CorporateAction[]=[]) => buildPortfolio(client,state(trades,cash,actions),quotes);
+const cashMove = (kind:CashMovement["kind"],amount:number,sequence=1,extra:Partial<CashMovement>={}):CashMovement => ({id:`m${sequence}`,clientId:"c",sequence,kind,amount,currency:"USD",fxRate:1,movementDate:"2026-10-01",...extra});
+const action = (factor:number,sequence=2,extra:Partial<CorporateAction>={}):CorporateAction => ({id:`a${sequence}`,clientId:"c",sequence,kind:"SPLIT",symbol:"X",actionDate:"2026-10-01",factor,...extra});
+
 describe("portfolio ledger and valuation",()=>{
   it("accounts for an empty book",()=>expect(summary([]).marketValue).toBe(10000));
   it("calculates FIFO partial sales including fees",()=>{
@@ -35,21 +38,48 @@ describe("portfolio ledger and valuation",()=>{
   it("never sums different base currencies",()=>{const p=summary([]);expect(()=>aggregateAum([p,{...p,client:{...client,baseCurrency:"AED"}}])).toThrow(/currencies/);});
   it("calculates daily FX P&L from both current and previous FX",()=>{const fx={...quote(.28),previousClose:.27};const p=summary([trade("BUY",10,100,1,{currency:"AED",fxRate:.27})],{X:{...quote(110,"AED"),previousClose:100},"AEDUSD=X":fx});expect(p.dayPnl).toBeCloseTo(38);expect(p.dayPnlComplete).toBe(true);});
   it("marks day P&L unavailable when its baseline is missing",()=>expect(summary([trade("BUY",1,100)],{X:{...quote(100),previousClose:undefined}}).dayPnlComplete).toBe(false));
+  it("allows a cash deposit to fund a later purchase",()=>{
+    const p=buildPortfolio({...client,initialCash:0},state([trade("BUY",10,100,2)],[cashMove("DEPOSIT",1000,1)],[]),{X:quote(100)});
+    expect(p.cash).toBe(0);expect(p.externalCashFlow).toBe(1000);expect(p.marketValue).toBe(1000);
+  });
+  it("counts dividends and coupons as income P&L",()=>{
+    const p=summary([trade("BUY",1,100)],{X:quote(100)},[cashMove("DIVIDEND",25,2),cashMove("COUPON",10,3)]);
+    expect(p.incomePnl).toBe(35);expect(p.totalPnl).toBe(35);expect(p.cash).toBe(9935);
+  });
+  it("counts fees and tax as negative income P&L",()=>{
+    const p=summary([],{},[cashMove("FEE",20),cashMove("TAX",5,2)]);
+    expect(p.incomePnl).toBe(-25);expect(p.totalPnl).toBe(-25);expect(p.cash).toBe(9975);
+  });
+  it("rejects a withdrawal that overdraws cash",()=>expect(()=>buildPortfolio({...client,initialCash:50},state([],[cashMove("WITHDRAWAL",100)],[]),{})).toThrow(/insufficient cash/));
+  it("applies a split while preserving total cost basis",()=>{
+    const p=summary([trade("BUY",10,100,1)],{X:quote(60)},[],[action(2,2)]);
+    expect(p.holdings[0].quantity).toBe(20);expect(p.holdings[0].averageCost).toBe(50);expect(p.costBasis).toBe(1000);expect(p.unrealisedPnl).toBe(200);
+  });
+  it("supports reverse splits and stock dividends as factors",()=>{
+    const reverse=summary([trade("BUY",10,100,1)],{},[],[action(.5,2,{kind:"REVERSE_SPLIT"})]);
+    expect(reverse.holdings[0].quantity).toBe(5);expect(reverse.holdings[0].averageCost).toBe(200);
+    const stockDiv=summary([trade("BUY",10,100,1)],{},[],[action(1.1,2,{kind:"STOCK_DIVIDEND"})]);
+    expect(stockDiv.holdings[0].quantity).toBeCloseTo(11);expect(stockDiv.costBasis).toBeCloseTo(1000);
+  });
+  it("rejects corporate actions without an open holding",()=>expect(()=>summary([],{},[],[action(2)])).toThrow(/no open holding/));
 });
+
 describe("validated and versioned state",()=>{
-  it("migrates legacy sequence in original input order",()=>{const s=state([trade("BUY",1,100)]);delete s.version;delete s.transactions[0].sequence;expect(validateState(s)).toMatchObject({version:2,transactions:[{sequence:1}]});});
+  it("migrates legacy sequence and adds v3 ledgers",()=>{const s:any=state([trade("BUY",1,100)]);delete s.version;delete s.transactions[0].sequence;delete s.cashMovements;delete s.corporateActions;expect(validateState(s)).toMatchObject({version:3,transactions:[{sequence:1}],cashMovements:[],corporateActions:[]});});
   it.each([NaN,Infinity,-1,0])("rejects bad quantity %s",n=>expect(()=>validateState(state([trade("BUY",n,100)]))).toThrow());
   it.each([-1,NaN,Infinity])("rejects bad fees %s",fees=>expect(()=>validateState(state([trade("BUY",1,100,1,{fees})]))).toThrow());
   it("rejects non-positive FX",()=>expect(()=>validateState(state([trade("BUY",1,100,1,{fxRate:0})]))).toThrow());
   it("rejects same-currency FX inconsistency",()=>expect(()=>validateState(state([trade("BUY",1,100,1,{fxRate:2})]))).toThrow());
   it("rejects duplicate IDs",()=>expect(()=>validateState(state([trade("BUY",1,100),trade("BUY",1,100)]))).toThrow());
-  it("rejects duplicate sequence",()=>expect(()=>validateState(state([trade("BUY",1,100),trade("BUY",1,100,1,{id:"other"})]))).toThrow());
+  it("rejects duplicate transaction sequence",()=>expect(()=>validateState(state([trade("BUY",1,100),trade("BUY",1,100,1,{id:"other"})]))).toThrow());
+  it("allows sequence values to overlap across ledger event types deterministically",()=>expect(validateState(state([trade("BUY",1,100,1)],[cashMove("DEPOSIT",100,1)])).version).toBe(3));
   it("rejects unknown clients",()=>expect(()=>validateState(state([trade("BUY",1,100,1,{clientId:"unknown"})]))).toThrow());
   it("rejects impossible dates",()=>expect(()=>validateState(state([trade("BUY",1,100,1,{tradeDate:"2026-02-30"})]))).toThrow());
-  it("rejects invalid records even with valid array containers",()=>expect(()=>validateState({clients:[{}],transactions:[],targets:[]})).toThrow());
+  it("rejects invalid records even with valid array containers",()=>expect(()=>validateState({clients:[{}],transactions:[],cashMovements:[],corporateActions:[],targets:[]})).toThrow());
   it("rejects future schema versions",()=>expect(()=>validateState({...state(),version:99})).toThrow());
   it("rejects empty client books",()=>expect(()=>validateState({...state(),clients:[]})).toThrow());
   it("rejects targets not totaling 100",()=>expect(()=>validateState({...state(),targets:[]})).toThrow(/100/));
   it("rejects target outside its mandate limits",()=>expect(()=>validateState({...state(),targets:[{clientId:"c",assetClass:"Cash",targetPct:100,maxPct:90}]})).toThrow());
   it("normalizes symbols and codes",()=>expect(validateState(state([trade("BUY",1,100,1,{symbol:"x"})])).transactions[0].symbol).toBe("X"));
+  it("rejects same-currency cash movements with non-1 FX",()=>expect(()=>validateState(state([], [cashMove("DEPOSIT",100,1,{fxRate:2})]))).toThrow(/FX rate 1/));
 });

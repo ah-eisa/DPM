@@ -3,7 +3,8 @@ import { importState, loadState, recoverState, resetState, saveState, seedState 
 let data: Map<string,string>;
 beforeEach(()=>{data=new Map();vi.stubGlobal("window",{});vi.stubGlobal("localStorage",{getItem:(k:string)=>data.get(k)??null,setItem:(k:string,v:string)=>data.set(k,v),removeItem:(k:string)=>data.delete(k)});});
 afterEach(()=>vi.unstubAllGlobals());
-it("validates and migrates the seed book",()=>expect(loadState().version).toBe(2));
+it("validates the v3 seed book",()=>expect(loadState()).toMatchObject({version:3,cashMovements:[],corporateActions:[]}));
+it("migrates a v2 saved book with empty operations ledgers",()=>{const legacy:any={...seedState,version:2};delete legacy.cashMovements;delete legacy.corporateActions;data.set("dpm-desk-state-v1",JSON.stringify(legacy));expect(loadState()).toMatchObject({version:3,cashMovements:[],corporateActions:[]});});
 it("preserves corrupt storage without silently resetting it",()=>{data.set("dpm-desk-state-v1","broken");expect(()=>loadState()).toThrow(/not been overwritten/);expect(data.get("dpm-desk-state-v1")).toBe("broken");});
 it("retains the previous book across reset",()=>{saveState({...seedState,clients:seedState.clients.map(c=>({...c,initialCash:c.initialCash+100}))});resetState();expect(recoverState().clients[0].initialCash).toBe(seedState.clients[0].initialCash+100);});
 it("rejects invalid imports",async()=>{await expect(importState({size:10,text:async()=>'{"clients":[{}],"transactions":[],"targets":[]}'} as File)).rejects.toThrow();});

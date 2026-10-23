@@ -1,37 +1,24 @@
 import { DpmState } from "./types";
-import { validateState } from "./validation";
+import { STATE_VERSION, validateState } from "./validation";
 
 const STORAGE_KEY = "dpm-desk-state-v1";
 const RECOVERY_KEY = "dpm-desk-recovery-v1";
 
 export const seedState: DpmState = {
+  version: STATE_VERSION,
   clients: [
-    {
-      id: "c001",
-      code: "C001",
-      label: "Balanced Mandate",
-      baseCurrency: "USD",
-      benchmark: "60% SPY / 40% BND",
-      riskProfile: "Balanced",
-      initialCash: 500000,
-    },
-    {
-      id: "c002",
-      code: "C002",
-      label: "Growth Mandate",
-      baseCurrency: "USD",
-      benchmark: "SPY",
-      riskProfile: "Growth",
-      initialCash: 750000,
-    },
+    { id: "c001", code: "C001", label: "Balanced Mandate", baseCurrency: "USD", benchmark: "60% SPY / 40% BND", riskProfile: "Balanced", initialCash: 500000 },
+    { id: "c002", code: "C002", label: "Growth Mandate", baseCurrency: "USD", benchmark: "SPY", riskProfile: "Growth", initialCash: 750000 },
   ],
   transactions: [
-    { id: "t1", clientId: "c001", symbol: "AAPL", name: "Apple", assetClass: "US Equity", side: "BUY", quantity: 300, price: 220, fees: 15, fxRate: 1, tradeDate: "2026-09-15" },
-    { id: "t2", clientId: "c001", symbol: "SPY", name: "SPDR S&P 500 ETF", assetClass: "ETF", side: "BUY", quantity: 250, price: 660, fees: 15, fxRate: 1, tradeDate: "2026-09-15" },
-    { id: "t3", clientId: "c001", symbol: "BTC-USD", name: "Bitcoin", assetClass: "Crypto", side: "BUY", quantity: 0.4, price: 108000, fees: 20, fxRate: 1, tradeDate: "2026-09-16" },
-    { id: "t4", clientId: "c002", symbol: "NVDA", name: "NVIDIA", assetClass: "US Equity", side: "BUY", quantity: 1200, price: 184, fees: 20, fxRate: 1, tradeDate: "2026-09-10" },
-    { id: "t5", clientId: "c002", symbol: "QQQ", name: "Invesco QQQ", assetClass: "ETF", side: "BUY", quantity: 500, price: 590, fees: 20, fxRate: 1, tradeDate: "2026-09-10" },
+    { id: "t1", sequence: 1, clientId: "c001", symbol: "AAPL", name: "Apple", assetClass: "US Equity", side: "BUY", quantity: 300, price: 220, fees: 15, fxRate: 1, currency: "USD", tradeDate: "2026-09-15" },
+    { id: "t2", sequence: 2, clientId: "c001", symbol: "SPY", name: "SPDR S&P 500 ETF", assetClass: "ETF", side: "BUY", quantity: 250, price: 660, fees: 15, fxRate: 1, currency: "USD", tradeDate: "2026-09-15" },
+    { id: "t3", sequence: 3, clientId: "c001", symbol: "BTC-USD", name: "Bitcoin", assetClass: "Crypto", side: "BUY", quantity: 0.4, price: 108000, fees: 20, fxRate: 1, currency: "USD", tradeDate: "2026-09-16" },
+    { id: "t4", sequence: 4, clientId: "c002", symbol: "NVDA", name: "NVIDIA", assetClass: "US Equity", side: "BUY", quantity: 1200, price: 184, fees: 20, fxRate: 1, currency: "USD", tradeDate: "2026-09-10" },
+    { id: "t5", sequence: 5, clientId: "c002", symbol: "QQQ", name: "Invesco QQQ", assetClass: "ETF", side: "BUY", quantity: 500, price: 590, fees: 20, fxRate: 1, currency: "USD", tradeDate: "2026-09-10" },
   ],
+  cashMovements: [],
+  corporateActions: [],
   targets: [
     { clientId: "c001", assetClass: "US Equity", targetPct: 20, minPct: 10, maxPct: 30 },
     { clientId: "c001", assetClass: "ETF", targetPct: 35, minPct: 25, maxPct: 45 },
@@ -98,5 +85,9 @@ export function downloadSavedBook() {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) throw new Error("No saved book available");
   const url = URL.createObjectURL(new Blob([raw], { type: "application/json" }));
-  const a = document.createElement("a"); a.href = url; a.download = "dpm-original-recovery.json"; a.click(); URL.revokeObjectURL(url);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "dpm-original-recovery.json";
+  a.click();
+  URL.revokeObjectURL(url);
 }
