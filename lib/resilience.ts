@@ -33,9 +33,26 @@ async function storePut(store:string,value:unknown,key?:IDBValidKey){const db=aw
 async function storeDelete(store:string,key:IDBValidKey){const db=await openDb();return new Promise<void>((resolve,reject)=>{const tx=db.transaction(store,"readwrite");tx.objectStore(store).delete(key);tx.oncomplete=()=>{db.close();resolve();};tx.onerror=()=>{db.close();reject(tx.error);};});}
 async function storeAll<T>(store:string):Promise<T[]>{const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(store,"readonly"),r=tx.objectStore(store).getAll();r.onsuccess=()=>resolve(r.result as T[]);r.onerror=()=>reject(r.error);tx.oncomplete=()=>db.close();});}
 
+let keyCreationInFlight:Promise<Uint8Array>|undefined;
+async function createOrReadRawKey():Promise<Uint8Array>{
+  const db=await openDb();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction(SETTINGS_STORE,"readwrite"),store=tx.objectStore(SETTINGS_STORE),request=store.get(KEY_SETTING);
+    let selected:Uint8Array|undefined;
+    request.onsuccess=()=>{
+      if(typeof request.result==="string"){selected=base64ToBytes(request.result);return;}
+      selected=crypto.getRandomValues(new Uint8Array(32));
+      store.add(bytesToBase64(selected),KEY_SETTING);
+    };
+    request.onerror=()=>{try{tx.abort();}catch{} reject(request.error??new Error("Could not read backup recovery key"));};
+    tx.oncomplete=()=>{db.close();selected?resolve(selected):reject(new Error("Could not create backup recovery key"));};
+    tx.onerror=()=>{db.close();reject(tx.error??new Error("Could not create backup recovery key"));};
+    tx.onabort=()=>{db.close();reject(tx.error??new Error("Could not create backup recovery key"));};
+  });
+}
 async function ensureRawKey():Promise<Uint8Array>{
-  const existing=await storeGet<string>(SETTINGS_STORE,KEY_SETTING); if(existing)return base64ToBytes(existing);
-  const raw=crypto.getRandomValues(new Uint8Array(32)); await storePut(SETTINGS_STORE,bytesToBase64(raw),KEY_SETTING); return raw;
+  keyCreationInFlight??=createOrReadRawKey().finally(()=>{keyCreationInFlight=undefined;});
+  return keyCreationInFlight;
 }
 async function cryptoKey(raw:Uint8Array){return crypto.subtle.importKey("raw",asArrayBuffer(raw),{name:"AES-GCM"},false,["encrypt","decrypt"]);}
 
