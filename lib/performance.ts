@@ -8,7 +8,6 @@ export type PerformanceResult = { points: PerformancePoint[]; twrPct: number; be
 
 type Position = { quantity: number; currency: string };
 
-const day = (value: string) => value.slice(0, 10);
 const key = (symbol: string) => symbol.toUpperCase();
 
 function latestAt(points: HistoryPoint[], date: string) {
@@ -94,7 +93,7 @@ export function calculatePerformance(state: DpmState, client: Client, series: Hi
         const amount = m.amount * m.fxRate;
         const negative = ["WITHDRAWAL", "FEE", "TAX"].includes(m.kind);
         cash += negative ? -amount : amount;
-        if (!["DIVIDEND", "COUPON", "INTEREST", "FEE", "TAX"].includes(m.kind)) flow += negative ? -amount : amount;
+        if (e.date >= startDate && !["DIVIDEND", "COUPON", "INTEREST", "FEE", "TAX"].includes(m.kind)) flow += negative ? -amount : amount;
       } else {
         const a: CorporateAction = e.item;
         const p = positions.get(a.symbol);
