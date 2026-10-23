@@ -38,7 +38,7 @@ describe("CSV duplicate protection without GTN references", () => {
       ...base,
       transactions:[{id:"t1",sequence:1,clientId:"c1",symbol:"AAPL",assetClass:"US Equity",side:"BUY",quantity:2,price:200,fees:1,fxRate:1,currency:"USD",tradeDate:"2026-10-20"}],
     };
-    const csv = `Client,Side,Symbol,Quantity,Price,Commission,Currency,FX Rate,Trade Date\nC001,BUY,AAPL,2,200,1,USD,1,2026-10-20`;
+    const csv = `Client,Side,Symbol,Quantity,Price,Commission,Currency,FX Rate,Trade Date,Asset Class\nC001,BUY,AAPL,2,200,1,USD,1,2026-10-20,US Equity`;
     expect(() => importGtnCsv(csv,state)).toThrow(/probable duplicate/i);
   });
 
@@ -47,7 +47,7 @@ describe("CSV duplicate protection without GTN references", () => {
       ...base,
       transactions:[{id:"t1",sequence:1,clientId:"c1",symbol:"AAPL",assetClass:"US Equity",side:"BUY",quantity:2,price:200,fees:1,fxRate:1,currency:"USD",tradeDate:"2026-10-20"}],
     };
-    const csv = `Client,Side,Symbol,Quantity,Price,Commission,Currency,FX Rate,Trade Date,GTN Ref\nC001,BUY,AAPL,2,200,1,USD,1,2026-10-20,NEW-REF`;
+    const csv = `Client,Side,Symbol,Quantity,Price,Commission,Currency,FX Rate,Trade Date,GTN Ref,Asset Class\nC001,BUY,AAPL,2,200,1,USD,1,2026-10-20,NEW-REF,US Equity`;
     expect(importGtnCsv(csv,state)).toHaveLength(1);
   });
 });
