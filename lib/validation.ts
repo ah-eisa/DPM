@@ -62,9 +62,8 @@ export function validateLedger(client: Client, transactions: Transaction[], cash
     }
     if (event.type === "action") {
       const action = event.item;
-      const p = positions.get(action.symbol);
-      if (!p) fail(`${action.symbol}: corporate action has no open holding on ${action.actionDate}`);
-      if (p.quantity <= 1e-10) fail(`${action.symbol}: corporate action has no open holding on ${action.actionDate}`);
+      const p = positions.get(action.symbol)!;
+      if (!p || p.quantity <= 1e-10) fail(`${action.symbol}: corporate action has no open holding on ${action.actionDate}`);
       p.quantity *= action.factor;
       if (!Number.isFinite(p.quantity) || p.quantity <= 0) fail("Corporate action creates invalid position");
       positions.set(action.symbol, p);
