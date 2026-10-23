@@ -8,6 +8,7 @@ export type PerformancePoint = { date: string; value: number; portfolioIndex: nu
 export type PerformanceResult = { points: PerformancePoint[]; twrPct: number; benchmarkPct?: number; excessPct?: number; startValue: number; endValue: number; externalFlows: number; benchmarkLabel: string; flowConvention: "beginning-of-day" };
 
 type Position = { quantity: number; currency: string };
+type LedgerEvent = ReturnType<typeof orderedLedgerEvents>[number];
 
 const key = (symbol: string) => symbol.toUpperCase();
 
@@ -15,6 +16,15 @@ function latestAt(points: HistoryPoint[], date: string, adjusted = false) {
   let found: number | undefined;
   for (const p of points) {
     if (p.date > date) break;
+    found = adjusted ? (p.adjustedClose ?? p.close) : p.close;
+  }
+  return found;
+}
+
+function latestBefore(points: HistoryPoint[], date: string, adjusted = false) {
+  let found: number | undefined;
+  for (const p of points) {
+    if (p.date >= date) break;
     found = adjusted ? (p.adjustedClose ?? p.close) : p.close;
   }
   return found;
@@ -45,6 +55,17 @@ function fxAt(currency: string, base: string, date: string, history: Map<string,
   return undefined;
 }
 
+function fxBefore(currency: string, base: string, date: string, history: Map<string, HistorySeries>) {
+  if (currency === base) return 1;
+  const direct = history.get(`${currency}${base}=X`);
+  const inverse = history.get(`${base}${currency}=X`);
+  const d = direct ? latestBefore(direct.points, date) : undefined;
+  if (d && d > 0) return d;
+  const i = inverse ? latestBefore(inverse.points, date) : undefined;
+  if (i && i > 0) return 1 / i;
+  return undefined;
+}
+
 function benchmarkLevel(parts: { symbol: string; weight: number }[], base: string, date: string, history: Map<string, HistorySeries>, bases: Map<string, number>) {
   let total = 0;
   for (const part of parts) {
@@ -71,50 +92,79 @@ export function calculatePerformance(state: DpmState, client: Client, series: Hi
   const benchmark = parseBenchmark(client.benchmark);
   const dates = new Set<string>();
   for (const symbol of [...symbols, ...benchmark.map(b => b.symbol)]) for (const p of history.get(symbol)?.points ?? []) if (p.date >= startDate && p.date <= endDate) dates.add(p.date);
-  for (const e of orderedLedgerEvents(client.id, state.transactions, state.cashMovements, state.corporateActions)) if (e.date >= startDate && e.date <= endDate) dates.add(e.date);
+  const events = orderedLedgerEvents(client.id, state.transactions, state.cashMovements, state.corporateActions);
+  for (const e of events) if (e.date >= startDate && e.date <= endDate) dates.add(e.date);
   const orderedDates = [...dates].sort();
   if (!orderedDates.length) throw new Error("No historical market data for this period");
 
   let cash = client.initialCash;
   const positions = new Map<string, Position>();
   let eventIndex = 0;
-  const events = orderedLedgerEvents(client.id, state.transactions, state.cashMovements, state.corporateActions);
-  let previousValue: number | undefined;
   let portfolioIndex = 100;
   let totalFlows = 0;
   let pendingFlow = 0;
-  let startValue: number | undefined;
-  const benchBases = new Map<string, number>();
   const points: PerformancePoint[] = [];
 
-  for (const date of orderedDates) {
-    while (eventIndex < events.length && events[eventIndex].date <= date) {
-      const e = events[eventIndex++];
-      if (e.type === "trade") {
-        const t: Transaction = e.item;
-        const gross = t.quantity * t.price * t.fxRate;
-        cash += t.side === "BUY" ? -(gross + t.fees) : gross - t.fees;
-        const symbol = key(t.symbol);
-        const p = positions.get(symbol) ?? { quantity: 0, currency: t.currency ?? client.baseCurrency };
-        p.quantity += t.side === "BUY" ? t.quantity : -t.quantity;
-        positions.set(symbol, p);
-      } else if (e.type === "cash") {
-        const m = e.item;
-        const amount = m.amount * m.fxRate;
-        const negative = ["WITHDRAWAL", "FEE", "TAX"].includes(m.kind);
-        const signed = negative ? -amount : amount;
-        cash += signed;
-        if (e.date >= startDate && isExternal(m.kind)) {
-          pendingFlow += signed;
-          totalFlows += signed;
-        }
-      } else {
-        const a: CorporateAction = e.item;
-        const symbol = key(a.symbol);
-        const p = positions.get(symbol);
-        if (p) p.quantity *= a.factor;
-      }
+  const applyEvent = (e: LedgerEvent, countPeriodFlow: boolean) => {
+    if (e.type === "trade") {
+      const t: Transaction = e.item;
+      const gross = t.quantity * t.price * t.fxRate;
+      cash += t.side === "BUY" ? -(gross + t.fees) : gross - t.fees;
+      const symbol = key(t.symbol);
+      const p = positions.get(symbol) ?? { quantity: 0, currency: t.currency ?? client.baseCurrency };
+      p.quantity += t.side === "BUY" ? t.quantity : -t.quantity;
+      positions.set(symbol, p);
+      return;
     }
+    if (e.type === "cash") {
+      const m = e.item;
+      const amount = m.amount * m.fxRate;
+      const negative = ["WITHDRAWAL", "FEE", "TAX"].includes(m.kind);
+      const signed = negative ? -amount : amount;
+      cash += signed;
+      if (countPeriodFlow && isExternal(m.kind)) {
+        pendingFlow += signed;
+        totalFlows += signed;
+      }
+      return;
+    }
+    const a: CorporateAction = e.item;
+    const symbol = key(a.symbol);
+    const p = positions.get(symbol);
+    if (p) p.quantity *= a.factor;
+  };
+
+  while (eventIndex < events.length && events[eventIndex].date < startDate) applyEvent(events[eventIndex++], false);
+
+  let openingValue = cash;
+  for (const [symbol, p] of positions) {
+    if (p.quantity < POSITION_EPSILON) continue;
+    const s = history.get(symbol);
+    const close = s ? latestBefore(s.points, startDate, false) : undefined;
+    const fx = s ? fxBefore(s.currency, client.baseCurrency, startDate, history) : undefined;
+    if (!close || !fx) throw new Error(`Opening valuation unavailable for ${symbol}; include a pre-period price anchor`);
+    openingValue += p.quantity * close * fx;
+  }
+  if (!Number.isFinite(openingValue) || openingValue < 0) throw new Error("Opening portfolio value is invalid");
+
+  let previousValue = openingValue;
+  const startValue = openingValue;
+  const benchBases = new Map<string, number>();
+  if (benchmark.length) {
+    const openingBases = new Map<string, number>();
+    let complete = true;
+    for (const part of benchmark) {
+      const s = history.get(key(part.symbol));
+      const close = s ? latestBefore(s.points, startDate, true) : undefined;
+      const fx = s ? fxBefore(s.currency, client.baseCurrency, startDate, history) : undefined;
+      if (!close || !fx) { complete = false; break; }
+      openingBases.set(part.symbol, close * fx);
+    }
+    if (complete) for (const [symbol, value] of openingBases) benchBases.set(symbol, value);
+  }
+
+  for (const date of orderedDates) {
+    while (eventIndex < events.length && events[eventIndex].date <= date) applyEvent(events[eventIndex++], true);
 
     let value = cash;
     let complete = true;
@@ -128,15 +178,10 @@ export function calculatePerformance(state: DpmState, client: Client, series: Hi
     }
     if (!complete || !Number.isFinite(value) || value <= 0) continue;
 
-    if (previousValue === undefined) {
-      startValue = value - pendingFlow;
-      previousValue = value;
-    } else {
-      const capitalAtRisk = previousValue + pendingFlow;
-      if (capitalAtRisk <= 0) throw new Error("External flows reduce beginning capital to zero or below");
-      portfolioIndex *= value / capitalAtRisk;
-      previousValue = value;
-    }
+    const capitalAtRisk = previousValue + pendingFlow;
+    if (capitalAtRisk <= 0) throw new Error("External flows reduce beginning capital to zero or below");
+    portfolioIndex *= value / capitalAtRisk;
+    previousValue = value;
 
     const benchmarkIndex = benchmark.length ? benchmarkLevel(benchmark, client.baseCurrency, date, history, benchBases) : undefined;
     points.push({ date, value, portfolioIndex, benchmarkIndex, externalFlow: pendingFlow });
@@ -152,7 +197,7 @@ export function calculatePerformance(state: DpmState, client: Client, series: Hi
     twrPct,
     benchmarkPct,
     excessPct: benchmarkPct == null ? undefined : twrPct - benchmarkPct,
-    startValue: startValue ?? points[0].value,
+    startValue,
     endValue: points.at(-1)!.value,
     externalFlows: totalFlows,
     benchmarkLabel: client.benchmark,
