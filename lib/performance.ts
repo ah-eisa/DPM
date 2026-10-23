@@ -1,3 +1,4 @@
+import { POSITION_EPSILON } from "./constants";
 import { Client, CorporateAction, DpmState, Transaction } from "./types";
 import { orderedLedgerEvents } from "./validation";
 
@@ -93,9 +94,10 @@ export function calculatePerformance(state: DpmState, client: Client, series: Hi
         const t: Transaction = e.item;
         const gross = t.quantity * t.price * t.fxRate;
         cash += t.side === "BUY" ? -(gross + t.fees) : gross - t.fees;
-        const p = positions.get(t.symbol) ?? { quantity: 0, currency: t.currency ?? client.baseCurrency };
+        const symbol = key(t.symbol);
+        const p = positions.get(symbol) ?? { quantity: 0, currency: t.currency ?? client.baseCurrency };
         p.quantity += t.side === "BUY" ? t.quantity : -t.quantity;
-        positions.set(t.symbol, p);
+        positions.set(symbol, p);
       } else if (e.type === "cash") {
         const m = e.item;
         const amount = m.amount * m.fxRate;
@@ -108,7 +110,8 @@ export function calculatePerformance(state: DpmState, client: Client, series: Hi
         }
       } else {
         const a: CorporateAction = e.item;
-        const p = positions.get(a.symbol);
+        const symbol = key(a.symbol);
+        const p = positions.get(symbol);
         if (p) p.quantity *= a.factor;
       }
     }
@@ -116,8 +119,8 @@ export function calculatePerformance(state: DpmState, client: Client, series: Hi
     let value = cash;
     let complete = true;
     for (const [symbol, p] of positions) {
-      if (p.quantity <= 1e-10) continue;
-      const s = history.get(key(symbol));
+      if (p.quantity < POSITION_EPSILON) continue;
+      const s = history.get(symbol);
       const close = s ? latestAt(s.points, date, false) : undefined;
       const fx = s ? fxAt(s.currency, client.baseCurrency, date, history) : undefined;
       if (!close || !fx) { complete = false; break; }
