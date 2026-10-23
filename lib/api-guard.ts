@@ -1,4 +1,7 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+export const MARKET_API_COOKIE = "dpm_market_api_session";
+const SESSION_PURPOSE = "dpm-market-api-session-v1";
 
 type RequestLike = { headers: Headers };
 type GuardFailure = { ok: false; status: number; error: string; headers?: Record<string, string> };
@@ -7,10 +10,32 @@ export type ApiGuardResult = { ok: true } | GuardFailure;
 type Bucket = { count: number; resetAt: number };
 const buckets = new Map<string, Bucket>();
 
-function tokenEqual(expected: string, supplied: string) {
+function constantTimeEqual(expected: string, supplied: string) {
   const a = Buffer.from(expected);
   const b = Buffer.from(supplied);
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function configuredToken(override?: string) { return (override ?? process.env.DPM_API_ACCESS_TOKEN ?? "").trim(); }
+
+export function verifyMarketAccessToken(supplied: string, override?: string) {
+  const expected = configuredToken(override);
+  return Boolean(expected && supplied && constantTimeEqual(expected, supplied.trim()));
+}
+
+export function marketApiSessionValue(override?: string) {
+  const expected = configuredToken(override);
+  if (!expected) return "";
+  return createHmac("sha256", expected).update(SESSION_PURPOSE).digest("base64url");
+}
+
+function cookieValue(request: RequestLike, name: string) {
+  const raw = request.headers.get("cookie") ?? "";
+  for (const part of raw.split(";")) {
+    const [key, ...value] = part.trim().split("=");
+    if (key === name) return decodeURIComponent(value.join("="));
+  }
+  return "";
 }
 
 function clientIp(request: RequestLike) {
@@ -31,7 +56,7 @@ function rateLimit(key: string, limit: number, now = Date.now()): GuardFailure |
 }
 
 export function guardMarketApi(request: RequestLike, scope: string, limitPerMinute: number, options?: { token?: string; production?: boolean; now?: number }): ApiGuardResult {
-  const expected = (options?.token ?? process.env.DPM_API_ACCESS_TOKEN ?? "").trim();
+  const expected = configuredToken(options?.token);
   const production = options?.production ?? process.env.NODE_ENV === "production";
   const now = options?.now ?? Date.now();
   const ip = clientIp(request);
@@ -42,11 +67,13 @@ export function guardMarketApi(request: RequestLike, scope: string, limitPerMinu
   }
 
   const auth = request.headers.get("authorization") ?? "";
-  const supplied = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  if (!supplied || !tokenEqual(expected, supplied)) {
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  const session = cookieValue(request, MARKET_API_COOKIE);
+  const authenticated = verifyMarketAccessToken(bearer, expected) || constantTimeEqual(marketApiSessionValue(expected), session);
+  if (!authenticated) {
     const blocked = rateLimit(`unauthorized:${ip}`, 20, now);
     if (blocked) return blocked;
-    return { ok: false, status: 401, error: "Market API authentication required", headers: { "WWW-Authenticate": "Bearer" } };
+    return { ok: false, status: 401, error: "Market API authentication required", headers: { "WWW-Authenticate": "Bearer", "X-DPM-Access": "/access" } };
   }
 
   return rateLimit(`${scope}:${ip}`, limitPerMinute, now) ?? { ok: true };
