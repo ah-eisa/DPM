@@ -1,4 +1,5 @@
 import { Client, DpmState, Holding, PortfolioSummary, Quote, Transaction } from "./types";
+import { orderedTrades, validateLedger } from "./validation";
 
 type Lot = { quantity: number; unitCost: number };
 
@@ -7,10 +8,8 @@ export function buildPortfolio(
   state: DpmState,
   quotes: Record<string, Quote>
 ): PortfolioSummary {
-  const txs = state.transactions
-    .filter((t) => t.clientId === client.id)
-    .slice()
-    .sort((a, b) => a.tradeDate.localeCompare(b.tradeDate));
+  validateLedger(client, state.transactions);
+  const txs = orderedTrades(state.transactions.filter((t) => t.clientId === client.id));
 
   const bySymbol = new Map<string, Transaction[]>();
   for (const tx of txs) {
@@ -27,8 +26,8 @@ export function buildPortfolio(
   for (const [symbol, items] of bySymbol) {
     const lots: Lot[] = [];
     let symbolRealised = 0;
-    let assetClass = items[items.length - 1].assetClass;
-    let name = items[items.length - 1].name;
+    const assetClass = items[0].assetClass;
+    const name = items.find(t => t.name)?.name;
 
     for (const tx of items) {
       const gross = tx.quantity * tx.price * tx.fxRate;
@@ -60,6 +59,12 @@ export function buildPortfolio(
     realisedPnl += symbolRealised;
 
     if (quantity > 1e-10) {
+      const quote = quotes[symbol];
+      const quoteCurrency = quote?.currency?.toUpperCase();
+      const fx = quoteCurrency === client.baseCurrency ? undefined : quotes[`${quoteCurrency}${client.baseCurrency}=X`];
+      const currencyMatches = !items[0].currency || items[0].currency === quoteCurrency;
+      const hasPrice = currencyMatches && !!quoteCurrency && Number.isFinite(quote?.price) && quote.price >= 0 && (quoteCurrency === client.baseCurrency || (!!fx && Number.isFinite(fx.price) && fx.price > 0)) && Number.isFinite(quantity * quote.price * (fx?.price ?? 1));
+      const stale = quote?.stale || fx?.stale || [quote, fx].some(q => q && (!Number.isFinite(Date.parse(q.asOf)) || Date.now() - Date.parse(q.asOf) > 24 * 60 * 60 * 1000));
       rawHoldings.push({
         symbol,
         name,
@@ -68,7 +73,9 @@ export function buildPortfolio(
         averageCost,
         costBasis,
         realisedPnl: symbolRealised,
-        marketPrice: quotes[symbol]?.price ?? averageCost,
+        marketPrice: hasPrice ? quote.price * (fx?.price ?? 1) : averageCost,
+        valuationStatus: !hasPrice ? "cost" : stale ? "stale" : "live",
+        valuationNote: !hasPrice ? "Indicative cost only: missing price, currency mismatch or FX rate" : stale ? "Latest available market quote is stale; review timestamp" : undefined,
       });
     }
   }
@@ -100,11 +107,17 @@ export function buildPortfolio(
   const unrealisedPnl = holdings.reduce((sum, h) => sum + h.unrealisedPnl, 0);
   const dayPnl = holdings.reduce((sum, h) => {
     const q = quotes[h.symbol];
-    if (!q?.previousClose) return sum;
-    return sum + h.quantity * (q.price - q.previousClose);
+    if (h.valuationStatus !== "live" || !q?.previousClose) return sum;
+    if (q.currency === client.baseCurrency) return sum + h.quantity * (q.price - q.previousClose);
+    const fx = quotes[`${q.currency}${client.baseCurrency}=X`];
+    if (!fx?.previousClose) return sum;
+    return sum + h.quantity * (q.price * fx.price - q.previousClose * fx.previousClose);
   }, 0);
+  const dayPnlComplete = holdings.every(h => h.valuationStatus === "live" && !!quotes[h.symbol]?.previousClose && (quotes[h.symbol].currency === client.baseCurrency || !!quotes[`${quotes[h.symbol].currency}${client.baseCurrency}=X`]?.previousClose));
 
   return {
+    dayPnlComplete,
+    valuationComplete: holdings.every(h => h.valuationStatus === "live"),
     client,
     holdings,
     cash,
@@ -120,8 +133,9 @@ export function buildPortfolio(
 }
 
 export function driftForClient(state: DpmState, summary: PortfolioSummary) {
-  return state.targets
-    .filter((t) => t.clientId === summary.client.id)
+  const targets = state.targets.filter(t => t.clientId === summary.client.id);
+  const classes = new Set([...targets.map(t => t.assetClass), ...summary.holdings.map(h => h.assetClass), "Cash" as const]);
+  return Array.from(classes).map(assetClass => targets.find(t => t.assetClass === assetClass) ?? { clientId: summary.client.id, assetClass, targetPct: 0, minPct: 0, maxPct: 0 })
     .map((t) => {
       const actualPct = summary.allocation[t.assetClass] ?? 0;
       const driftPct = actualPct - t.targetPct;
@@ -136,5 +150,6 @@ export function driftForClient(state: DpmState, summary: PortfolioSummary) {
 }
 
 export function aggregateAum(summaries: PortfolioSummary[]) {
+  if (new Set(summaries.map(p => p.client.baseCurrency)).size > 1) throw new Error("Cannot aggregate different base currencies");
   return summaries.reduce((sum, p) => sum + p.marketValue, 0);
 }

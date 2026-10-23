@@ -21,6 +21,8 @@ export interface Client {
 }
 
 export interface Transaction {
+  sequence?: number;
+  currency?: string;
   id: string;
   clientId: string;
   symbol: string;
@@ -45,6 +47,8 @@ export interface TargetAllocation {
 }
 
 export interface Quote {
+  stale?: boolean;
+  fetchedAt?: string;
   symbol: string;
   price: number;
   currency?: string;
@@ -55,12 +59,15 @@ export interface Quote {
 }
 
 export interface DpmState {
+  version?: number;
   clients: Client[];
   transactions: Transaction[];
   targets: TargetAllocation[];
 }
 
 export interface Holding {
+  valuationStatus: "live" | "stale" | "cost";
+  valuationNote?: string;
   symbol: string;
   name?: string;
   assetClass: AssetClass;
@@ -76,6 +83,8 @@ export interface Holding {
 }
 
 export interface PortfolioSummary {
+  dayPnlComplete: boolean;
+  valuationComplete: boolean;
   client: Client;
   holdings: Holding[];
   cash: number;
