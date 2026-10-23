@@ -71,6 +71,11 @@ function parseAssetClass(value: string | undefined): AssetClass {
   return map[norm(value)] ?? "Other";
 }
 
+function probableTradeFingerprint(tx: Pick<Transaction,"clientId"|"side"|"symbol"|"quantity"|"price"|"fees"|"currency"|"fxRate"|"tradeDate">) {
+  const n = (value: number) => Number(value.toPrecision(12));
+  return [tx.clientId, tx.tradeDate, tx.side, tx.symbol.toUpperCase(), n(tx.quantity), n(tx.price), n(tx.fees), (tx.currency ?? "").toUpperCase(), n(tx.fxRate)].join("|");
+}
+
 export function importGtnCsv(text: string, state: DpmState): Transaction[] {
   if (text.length > 5 * 1024 * 1024) throw new Error("CSV exceeds 5 MB");
   const rows = parseCsvRows(text.replace(/^\uFEFF/, ""));
@@ -80,6 +85,7 @@ export function importGtnCsv(text: string, state: DpmState): Transaction[] {
   for (const required of ["client", "side", "symbol", "quantity", "price", "tradeDate"] as const) if (idx[required] < 0) throw new Error(`GTN CSV is missing ${required} column`);
   const clients = new Map(state.clients.map(c => [c.code.toUpperCase(), c]));
   const existingRefs = new Set(state.transactions.map(t => t.gtnRef).filter((x): x is string => !!x));
+  const probableDuplicates = new Set(state.transactions.filter(t => !t.gtnRef).map(probableTradeFingerprint));
   let sequence = maxLedgerSequence(state); const stamp = Date.now().toString(36); const transactions: Transaction[] = [];
 
   rows.slice(1).forEach((row, rowIndex) => {
@@ -93,12 +99,17 @@ export function importGtnCsv(text: string, state: DpmState): Transaction[] {
     const fxRate = fxRaw ? parseNumber(fxRaw, `FX rate on row ${rowIndex + 2}`) : ccy === client.baseCurrency ? 1 : (() => { throw new Error(`Row ${rowIndex + 2}: foreign-currency trade requires FX rate`); })();
     const gtnRef = get("gtnRef") || undefined;
     if (gtnRef && existingRefs.has(gtnRef)) throw new Error(`Row ${rowIndex + 2}: duplicate GTN reference ${gtnRef}`);
-    if (gtnRef) existingRefs.add(gtnRef);
-    transactions.push({
+    const candidate: Transaction = {
       id:`gtn_${stamp}_${rowIndex+1}`,sequence:++sequence,clientId:client.id,symbol:(get("symbol")??"").toUpperCase(),name:get("name")||undefined,
       assetClass:parseAssetClass(get("assetClass")),side,quantity:parseNumber(get("quantity"),`quantity on row ${rowIndex+2}`),price:parseNumber(get("price"),`price on row ${rowIndex+2}`),
       fees:parseNumber(get("fees"),`fees on row ${rowIndex+2}`,0),currency:ccy,fxRate,tradeDate:get("tradeDate")??"",gtnRef,notes:"Imported from GTN CSV",
-    });
+    };
+    if (!gtnRef) {
+      const fingerprint = probableTradeFingerprint(candidate);
+      if (probableDuplicates.has(fingerprint)) throw new Error(`Row ${rowIndex + 2}: probable duplicate execution without GTN reference`);
+      probableDuplicates.add(fingerprint);
+    } else existingRefs.add(gtnRef);
+    transactions.push(candidate);
   });
   validateState({ ...state, transactions: [...state.transactions, ...transactions] }); return transactions;
 }
