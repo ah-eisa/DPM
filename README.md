@@ -17,6 +17,7 @@ A lightweight, local-first discretionary portfolio management workbench for moni
 - Versioned validation and recovery-safe storage
 - Encrypted resilience backups with 30-snapshot retention
 - Market-data provider abstraction with optional secondary provider adapter
+- Protected market-data APIs with HttpOnly sessions and per-IP rate limits
 - CI checks for lint, tests, TypeScript, production build and dependency audit
 
 ## Quick start
@@ -48,7 +49,7 @@ Browser
   optional encrypted folder backup (.dpmx)
   FIFO / P&L / allocation / TWR engines
         |
-        | symbols only
+        | symbols only + protected same-origin session
         v
 Next.js market-data routes
         |
@@ -62,17 +63,25 @@ Client records, portfolio transactions and mandate targets remain in browser sto
 
 ## Backup and recovery
 
-Every successful book save creates an encrypted IndexedDB snapshot. The newest 30 snapshots are retained. Open `/backup` to:
+Every successful book save creates an encrypted IndexedDB snapshot. The newest 30 snapshots are retained. Open `/backup` to create a snapshot, restore/delete retained snapshots, download an encrypted `.dpmx` backup, export/import the recovery-key file, or connect a Chromium File System Access folder for automatic encrypted file backups.
 
-- create a snapshot immediately;
-- restore or delete retained snapshots;
-- download an encrypted `.dpmx` backup;
-- export/import the recovery-key file;
-- connect a Chromium File System Access folder for automatic encrypted file backups.
+For device-loss protection, choose a folder that is independently synced or backed up and keep the recovery-key file in a separate approved location. The recovery-key file itself is plain base64 key material; anyone holding both that file and a `.dpmx` backup can decrypt it. Treat the key file as a secret. Passphrase wrapping is a future hardening option for shared deployments.
 
-For device-loss protection, choose a folder that is independently synced or backed up (for example an approved OneDrive/Google Drive/Dropbox-synced folder) and keep the recovery-key file in a separate approved location. The recovery key is required to decrypt `.dpmx` files created by a lost browser profile. Folder auto-backup is browser-permission dependent and is therefore a secondary resilience layer, not an authoritative recordkeeping system.
+One backup operation now creates one encrypted envelope and reuses that same envelope for the IndexedDB snapshot and optional folder copy, avoiding duplicate encryption work. Folder auto-backup is browser-permission dependent and remains a secondary resilience layer, not an authoritative recordkeeping system.
 
-The primary book still has a previous-save recovery slot, but that slot and IndexedDB are on the same browser profile and must not be treated as off-device backup.
+## Market API access
+
+Production deployments must set:
+
+```text
+DPM_API_ACCESS_TOKEN=use-a-long-random-secret
+```
+
+When `NODE_ENV=production`, `/api/quotes` and `/api/history` fail closed with 503 if this secret is not configured. Visit `/access`, enter the token once, and the server issues a session-only `HttpOnly`, `SameSite=Strict` cookie derived from the secret with HMAC-SHA256. The raw token is not stored in browser JavaScript storage.
+
+The quote endpoint is limited to 120 authenticated requests/minute per observed client IP and the history endpoint to 30/minute. Failed authentication attempts are also rate-limited. These limits are in-process; horizontally scaled/serverless deployments should add a shared limiter at the platform, gateway or datastore layer for strict global enforcement.
+
+Local development remains usable without a market token when not running in production mode.
 
 ## Market data providers
 
@@ -89,6 +98,8 @@ The adapter contract is:
 - `GET /history?symbol=AAPL&start=YYYY-MM-DD&end=YYYY-MM-DD&interval=1d|1wk` → `{ symbol, currency, points: [{ date, close, adjustedClose? }] }` or the equivalent series object itself.
 
 The cascade tries the secondary provider after a primary failure and also prefers a live secondary quote over an explicitly stale primary cached quote. Portfolio history uses raw closes because recorded corporate actions alter holdings; benchmark history uses adjusted close when available. Provider licensing and redistribution rights remain the deployer's responsibility.
+
+The `User-Agent: DPMDesk/1.0` header is set only by the server-side provider requests. It is not a browser-side protection mechanism and should not be treated as authentication or anti-abuse control.
 
 ## Accounting and validation rules
 
