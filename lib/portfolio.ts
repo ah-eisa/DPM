@@ -1,3 +1,4 @@
+import { POSITION_EPSILON } from "./constants";
 import { CashMovement, Client, DpmState, Holding, PortfolioSummary, Quote, Transaction } from "./types";
 import { orderedLedgerEvents, validateLedger } from "./validation";
 
@@ -67,7 +68,7 @@ export function buildPortfolio(
         costRemoved += used * lot.unitCost;
         lot.quantity -= used;
         remaining -= used;
-        if (lot.quantity <= 1e-10) lots.shift();
+        if (lot.quantity < POSITION_EPSILON) lots.shift();
       }
       realisedBySymbol.set(symbol, (realisedBySymbol.get(symbol) ?? 0) + gross - tx.fees - costRemoved);
     }
@@ -77,7 +78,7 @@ export function buildPortfolio(
   const rawHoldings: Omit<Holding, "marketValue" | "unrealisedPnl" | "totalPnl" | "weight">[] = [];
   for (const [symbol, lots] of lotsBySymbol) {
     const quantity = lots.reduce((sum, lot) => sum + lot.quantity, 0);
-    if (quantity <= 1e-10) continue;
+    if (quantity < POSITION_EPSILON) continue;
     const costBasis = lots.reduce((sum, lot) => sum + lot.quantity * lot.unitCost, 0);
     const averageCost = costBasis / quantity;
     const meta = metaBySymbol.get(symbol)!;
