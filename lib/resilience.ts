@@ -17,6 +17,7 @@ type PermissionHandle = FileSystemHandle & { queryPermission?: (options?: { mode
 function requireBrowser() { if (typeof window === "undefined" || typeof indexedDB === "undefined") throw new Error("Backup storage is only available in the browser"); }
 function bytesToBase64(bytes: Uint8Array) { let out = ""; for (const b of bytes) out += String.fromCharCode(b); return btoa(out); }
 function base64ToBytes(value: string) { const raw = atob(value); const out = new Uint8Array(raw.length); for (let i=0;i<raw.length;i++) out[i]=raw.charCodeAt(i); return out; }
+function asArrayBuffer(bytes:Uint8Array):ArrayBuffer{const copy=new Uint8Array(bytes.byteLength);copy.set(bytes);return copy.buffer;}
 
 function openDb(): Promise<IDBDatabase> {
   requireBrowser();
@@ -36,7 +37,7 @@ async function ensureRawKey():Promise<Uint8Array>{
   const existing=await storeGet<string>(SETTINGS_STORE,KEY_SETTING); if(existing)return base64ToBytes(existing);
   const raw=crypto.getRandomValues(new Uint8Array(32)); await storePut(SETTINGS_STORE,bytesToBase64(raw),KEY_SETTING); return raw;
 }
-async function cryptoKey(raw:Uint8Array){return crypto.subtle.importKey("raw",raw,{name:"AES-GCM"},false,["encrypt","decrypt"]);}
+async function cryptoKey(raw:Uint8Array){return crypto.subtle.importKey("raw",asArrayBuffer(raw),{name:"AES-GCM"},false,["encrypt","decrypt"]);}
 
 export async function encryptState(state:DpmState,rawKey?:Uint8Array):Promise<EncryptedBackupEnvelope>{
   const valid=validateState(state),raw=rawKey??await ensureRawKey(),iv=crypto.getRandomValues(new Uint8Array(12));
