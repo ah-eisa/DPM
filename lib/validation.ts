@@ -151,6 +151,16 @@ export function validateState(input: unknown): DpmState {
     return { id, clientId, sequence, kind: r.kind, symbol: symbol(r.symbol), actionDate: date(r.actionDate, "action date"), factor: number(r.factor, "corporate action factor", Number.MIN_VALUE), ...(r.reference ? { reference: str(r.reference, "reference") } : {}), ...(r.notes ? { notes: str(r.notes, "notes") } : {}) } as CorporateAction;
   });
 
+  const globalSequences = new Set<number>();
+  for (const sequence of [
+    ...transactions.map(t => t.sequence ?? 0),
+    ...cashMovements.map(m => m.sequence),
+    ...corporateActions.map(a => a.sequence),
+  ]) {
+    if (globalSequences.has(sequence)) fail("Ledger sequence must be globally unique across trades, cash movements and corporate actions");
+    globalSequences.add(sequence);
+  }
+
   const targetKeys = new Set<string>();
   const targets = (root.targets as unknown[]).map(item => {
     const r = object(item), clientId = str(r.clientId, "client ID"), assetClass = r.assetClass as AssetClass;
