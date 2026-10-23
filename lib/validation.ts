@@ -32,13 +32,7 @@ function isSupportedCurrency(code: string) {
   } catch {
     // Older engines may expose the function but not support this key reliably.
   }
-  if (FALLBACK_CURRENCIES.has(code)) return true;
-  try {
-    new Intl.NumberFormat("en", { style: "currency", currency: code }).format(0);
-    return true;
-  } catch {
-    return false;
-  }
+  return FALLBACK_CURRENCIES.has(code);
 }
 
 export function currency(value: unknown): string {
