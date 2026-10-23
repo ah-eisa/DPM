@@ -55,6 +55,10 @@ function rateLimit(key: string, limit: number, now = Date.now()): GuardFailure |
   return { ok: false, status: 429, error: "Market data request limit exceeded; retry shortly", headers: { "Retry-After": String(retry) } };
 }
 
+export function guardMarketLoginAttempt(request: RequestLike, now = Date.now()): ApiGuardResult {
+  return rateLimit(`login:${clientIp(request)}`, 10, now) ?? { ok: true };
+}
+
 export function guardMarketApi(request: RequestLike, scope: string, limitPerMinute: number, options?: { token?: string; production?: boolean; now?: number }): ApiGuardResult {
   const expected = configuredToken(options?.token);
   const production = options?.production ?? process.env.NODE_ENV === "production";
