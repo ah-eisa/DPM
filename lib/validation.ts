@@ -1,9 +1,15 @@
+import { POSITION_EPSILON } from "./constants";
 import { AssetClass, CashMovement, Client, CorporateAction, DpmState, Transaction } from "./types";
 
 export const STATE_VERSION = 3;
 export const ASSET_CLASSES: AssetClass[] = ["US Equity", "UAE Equity", "ETF", "Bond/Sukuk", "Crypto", "Metal", "Cash", "Other"];
 const CASH_KINDS = ["DEPOSIT", "WITHDRAWAL", "DIVIDEND", "COUPON", "INTEREST", "FEE", "TAX", "OTHER"] as const;
 const ACTION_KINDS = ["SPLIT", "REVERSE_SPLIT", "STOCK_DIVIDEND"] as const;
+const FALLBACK_CURRENCIES = new Set([
+  "AED", "USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "SGD", "HKD", "CNY",
+  "SAR", "QAR", "KWD", "BHD", "OMR", "INR", "ZAR", "EGP", "JOD", "TRY", "NOK", "SEK",
+  "DKK", "PLN", "CZK", "HUF", "THB", "IDR", "MYR", "PHP", "KRW", "BRL", "MXN", "ILS"
+]);
 const fail = (message: string): never => { throw new Error(message); };
 const object = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : fail("Expected a record");
 const str = (value: unknown, name: string) => typeof value === "string" && value.trim().length > 0 && value.length <= 500 ? value.trim() : fail(`Invalid ${name}`);
@@ -19,9 +25,25 @@ const symbol = (value: unknown) => {
   return s;
 };
 
+function isSupportedCurrency(code: string) {
+  try {
+    const supportedValuesOf = (Intl as typeof Intl & { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf;
+    if (typeof supportedValuesOf === "function") return supportedValuesOf("currency").includes(code);
+  } catch {
+    // Older engines may expose the function but not support this key reliably.
+  }
+  if (FALLBACK_CURRENCIES.has(code)) return true;
+  try {
+    new Intl.NumberFormat("en", { style: "currency", currency: code }).format(0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function currency(value: unknown): string {
   const code = str(value, "currency").toUpperCase();
-  if (!/^[A-Z]{3}$/.test(code) || !Intl.supportedValuesOf("currency").includes(code)) fail("Unsupported currency");
+  if (!/^[A-Z]{3}$/.test(code) || !isSupportedCurrency(code)) fail("Unsupported currency");
   return code;
 }
 
@@ -63,14 +85,14 @@ export function validateLedger(client: Client, transactions: Transaction[], cash
     if (event.type === "action") {
       const action = event.item;
       const p = positions.get(action.symbol)!;
-      if (!p || p.quantity <= 1e-10) fail(`${action.symbol}: corporate action has no open holding on ${action.actionDate}`);
+      if (!p || p.quantity < POSITION_EPSILON) fail(`${action.symbol}: corporate action has no open holding on ${action.actionDate}`);
       p.quantity *= action.factor;
       if (!Number.isFinite(p.quantity) || p.quantity <= 0) fail("Corporate action creates invalid position");
       positions.set(action.symbol, p);
       continue;
     }
     const tx = event.item;
-    if (![tx.quantity, tx.price, tx.fees, tx.fxRate].every(Number.isFinite) || tx.quantity <= 0 || tx.price < 0 || tx.fees < 0 || tx.fxRate <= 0 || !["BUY", "SELL"].includes(tx.side)) fail("Invalid trade numbers or side");
+    if (![tx.quantity, tx.price, tx.fees, tx.fxRate].every(Number.isFinite) || tx.quantity < POSITION_EPSILON || tx.price < 0 || tx.fees < 0 || tx.fxRate <= 0 || !["BUY", "SELL"].includes(tx.side)) fail("Invalid trade numbers or side");
     const quoteCurrency = tx.currency ?? (tx.fxRate === 1 ? client.baseCurrency : "UNKNOWN");
     if (quoteCurrency === client.baseCurrency && tx.fxRate !== 1) fail("Same-currency execution requires FX rate 1");
     const p = positions.get(tx.symbol) ?? { quantity: 0, assetClass: tx.assetClass, currency: quoteCurrency };
@@ -83,7 +105,7 @@ export function validateLedger(client: Client, transactions: Transaction[], cash
       p.quantity += tx.quantity;
       if (cash < -1e-7) fail(`${client.code}: insufficient cash on ${tx.tradeDate}`);
     } else {
-      if (tx.quantity > p.quantity + 1e-10) fail(`${tx.symbol}: sale exceeds holdings on ${tx.tradeDate}`);
+      if (tx.quantity > p.quantity + POSITION_EPSILON) fail(`${tx.symbol}: sale exceeds holdings on ${tx.tradeDate}`);
       p.quantity = Math.max(0, p.quantity - tx.quantity);
       cash += gross - tx.fees;
       if (cash < -1e-7) fail(`${client.code}: insufficient cash for fees`);
@@ -117,7 +139,7 @@ export function validateState(input: unknown): DpmState {
     txSequences.add(sequence);
     if (r.side !== "BUY" && r.side !== "SELL") fail("Invalid trade side");
     if (!ASSET_CLASSES.includes(r.assetClass as AssetClass) || r.assetClass === "Cash") fail("Invalid trade asset class");
-    return { id, clientId, sequence, symbol: symbol(r.symbol), side: r.side, quantity: number(r.quantity, "quantity", Number.MIN_VALUE), price: number(r.price, "price"), fees: number(r.fees, "fees"), fxRate: number(r.fxRate, "FX rate", Number.MIN_VALUE), tradeDate: date(r.tradeDate, "trade date"), assetClass: r.assetClass, ...(r.currency ? { currency: currency(r.currency) } : {}), ...(r.name ? { name: str(r.name, "name") } : {}), ...(r.gtnRef ? { gtnRef: str(r.gtnRef, "GTN reference") } : {}), ...(r.notes ? { notes: str(r.notes, "notes") } : {}) } as Transaction;
+    return { id, clientId, sequence, symbol: symbol(r.symbol), side: r.side, quantity: number(r.quantity, "quantity", POSITION_EPSILON), price: number(r.price, "price"), fees: number(r.fees, "fees"), fxRate: number(r.fxRate, "FX rate", Number.MIN_VALUE), tradeDate: date(r.tradeDate, "trade date"), assetClass: r.assetClass, ...(r.currency ? { currency: currency(r.currency) } : {}), ...(r.name ? { name: str(r.name, "name") } : {}), ...(r.gtnRef ? { gtnRef: str(r.gtnRef, "GTN reference") } : {}), ...(r.notes ? { notes: str(r.notes, "notes") } : {}) } as Transaction;
   });
 
   const rawCash = root.cashMovements === undefined && root.version !== STATE_VERSION ? [] : root.cashMovements;
