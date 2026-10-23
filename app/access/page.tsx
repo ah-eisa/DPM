@@ -1,0 +1,10 @@
+"use client";
+
+import { FormEvent, useState } from "react";
+
+export default function AccessPage(){
+  const [token,setToken]=useState("");const [error,setError]=useState("");const [busy,setBusy]=useState(false);
+  async function submit(e:FormEvent){e.preventDefault();setBusy(true);setError("");try{const r=await fetch("/api/market-auth",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token}),cache:"no-store"});const data=await r.json();if(!r.ok)throw new Error(data.error??"Access failed");window.location.href="/";}catch(e){setError(e instanceof Error?e.message:"Access failed");setBusy(false);}}
+  async function logout(){await fetch("/api/market-auth",{method:"DELETE",cache:"no-store"});setError("Market-data session cleared.");}
+  return <main className="app"><header className="topbar"><div className="brand"><div className="brandmark">A</div><div><h1>Market Data Access</h1><div className="muted small">Unlock protected quote and history APIs</div></div></div><div className="row"><a className="btn" href="/">Dashboard</a></div></header><div className="container"><section className="card" style={{maxWidth:640,margin:"40px auto"}}><h2>Enter access token</h2><p className="muted">The token is sent once to the server. On success the server issues an HttpOnly session cookie; the raw token is not stored by the app.</p>{error&&<div className="notice negative" role="alert">{error}</div>}<form onSubmit={submit} className="form-grid"><label className="field full"><span>Market API access token</span><input type="password" autoComplete="current-password" value={token} onChange={e=>setToken(e.target.value)} required /></label><div className="row"><button className="btn primary" disabled={busy}>{busy?"Checking...":"Unlock market data"}</button><button type="button" className="btn" onClick={logout}>Clear session</button></div></form><p className="muted small" style={{marginTop:18}}>Set <code>DPM_API_ACCESS_TOKEN</code> in the production environment. Local development remains available without a token when NODE_ENV is not production.</p></section></div></main>;
+}
