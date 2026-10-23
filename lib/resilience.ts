@@ -4,7 +4,7 @@ import { validateState } from "./validation";
 const DB_NAME = "dpm-desk-resilience-v1";
 const SNAPSHOT_STORE = "snapshots";
 const SETTINGS_STORE = "settings";
-const RETENTION = 30;
+export const BACKUP_RETENTION = 30;
 const KEY_SETTING = "device-backup-key";
 const FOLDER_SETTING = "backup-folder";
 
@@ -50,30 +50,29 @@ export async function decryptState(envelope:EncryptedBackupEnvelope,rawKey?:Uint
   try{const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:base64ToBytes(envelope.iv)},await cryptoKey(raw),base64ToBytes(envelope.ciphertext));return validateState(JSON.parse(new TextDecoder().decode(plain)));}catch{throw new Error("Encrypted backup could not be decrypted with this recovery key");}
 }
 
-export async function createSnapshot(state:DpmState){
-  const envelope=await encryptState(state),snapshot:BackupSnapshot={id:`${Date.now()}-${crypto.getRandomValues(new Uint32Array(1))[0]}`,createdAt:envelope.createdAt,envelope}; await storePut(SNAPSHOT_STORE,snapshot);
-  const all=(await storeAll<BackupSnapshot>(SNAPSHOT_STORE)).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)); for(const old of all.slice(RETENTION))await storeDelete(SNAPSHOT_STORE,old.id); return snapshot;
-}
+export function retentionVictims(snapshots:BackupSnapshot[]){return snapshots.slice().sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(BACKUP_RETENTION);}
+async function storeSnapshotEnvelope(envelope:EncryptedBackupEnvelope){const snapshot:BackupSnapshot={id:`${Date.now()}-${crypto.getRandomValues(new Uint32Array(1))[0]}`,createdAt:envelope.createdAt,envelope};await storePut(SNAPSHOT_STORE,snapshot);const all=await storeAll<BackupSnapshot>(SNAPSHOT_STORE);for(const old of retentionVictims(all))await storeDelete(SNAPSHOT_STORE,old.id);return snapshot;}
+export async function createSnapshot(state:DpmState){return storeSnapshotEnvelope(await encryptState(state));}
 export async function listSnapshots(){return (await storeAll<BackupSnapshot>(SNAPSHOT_STORE)).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));}
 export async function restoreSnapshot(id:string){const snapshot=await storeGet<BackupSnapshot>(SNAPSHOT_STORE,id);if(!snapshot)throw new Error("Snapshot not found");return decryptState(snapshot.envelope);}
 export async function deleteSnapshot(id:string){await storeDelete(SNAPSHOT_STORE,id);}
 
 function downloadText(name:string,text:string,type="application/json"){const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement("a");a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);}
 export async function downloadRecoveryKey(){const raw=await ensureRawKey();downloadText("dpm-desk-recovery-key.json",JSON.stringify({type:"dpm-desk-recovery-key",version:1,key:bytesToBase64(raw)},null,2));}
-export async function importRecoveryKey(file:File){const parsed=JSON.parse(await file.text()) as {type?:string;version?:number;key?:string};if(parsed.type!=="dpm-desk-recovery-key"||parsed.version!==1||!parsed.key)throw new Error("Invalid recovery key file");const raw=base64ToBytes(parsed.key);if(raw.length!==32)throw new Error("Invalid recovery key length");await storePut(SETTINGS_STORE,parsed.key,KEY_SETTING);}
+export async function importRecoveryKey(file:File){let parsed:{type?:string;version?:number;key?:string};try{parsed=JSON.parse(await file.text()) as typeof parsed;}catch{throw new Error("Recovery key file is not valid JSON");}if(parsed.type!=="dpm-desk-recovery-key"||parsed.version!==1||!parsed.key)throw new Error("Invalid recovery key file");const raw=base64ToBytes(parsed.key);if(raw.length!==32)throw new Error("Invalid recovery key length");await storePut(SETTINGS_STORE,parsed.key,KEY_SETTING);}
 export async function downloadEncryptedBackup(state:DpmState){const envelope=await encryptState(state);downloadText(`dpm-desk-${new Date().toISOString().replace(/[:.]/g,"-")}.dpmx`,JSON.stringify(envelope,null,2),"application/octet-stream");}
-export async function importEncryptedBackup(file:File){if(file.size>10*1024*1024)throw new Error("Encrypted backup exceeds 10 MB");return decryptState(JSON.parse(await file.text()) as EncryptedBackupEnvelope);}
+export async function importEncryptedBackup(file:File){if(file.size>10*1024*1024)throw new Error("Encrypted backup exceeds 10 MB");let envelope:EncryptedBackupEnvelope;try{envelope=JSON.parse(await file.text()) as EncryptedBackupEnvelope;}catch{throw new Error("Encrypted backup file is not valid JSON");}return decryptState(envelope);}
 
 async function permission(handle:PermissionHandle,request=false){const options={mode:"readwrite" as const};const current=handle.queryPermission?await handle.queryPermission(options):"granted";if(current==="granted")return true;if(request&&handle.requestPermission)return await handle.requestPermission(options)==="granted";return false;}
 export async function connectBackupFolder(){const picker=(window as PickerWindow).showDirectoryPicker;if(!picker)throw new Error("Folder auto-backup requires a Chromium browser with File System Access support");const handle=await picker();if(!await permission(handle,true))throw new Error("Backup folder permission was not granted");await storePut(SETTINGS_STORE,handle,FOLDER_SETTING);return handle.name;}
 export async function disconnectBackupFolder(){await storeDelete(SETTINGS_STORE,FOLDER_SETTING);}
 export async function connectedFolderName(){const handle=await storeGet<FileSystemDirectoryHandle>(SETTINGS_STORE,FOLDER_SETTING);return handle?.name;}
 
-async function writeFolderBackup(state:DpmState){
+async function writeFolderBackup(envelope:EncryptedBackupEnvelope){
   const handle=await storeGet<FileSystemDirectoryHandle>(SETTINGS_STORE,FOLDER_SETTING);if(!handle||!await permission(handle))return false;
-  const envelope=await encryptState(state),name=`dpm-backup-${envelope.createdAt.replace(/[:.]/g,"-")}.dpmx`,file=await handle.getFileHandle(name,{create:true}),writer=await file.createWritable();await writer.write(JSON.stringify(envelope));await writer.close();
-  const entries:string[]=[];for await(const [entryName] of (handle as FileSystemDirectoryHandle & {entries():AsyncIterableIterator<[string,FileSystemHandle]>}).entries())if(entryName.startsWith("dpm-backup-")&&entryName.endsWith(".dpmx"))entries.push(entryName);entries.sort().reverse();for(const old of entries.slice(RETENTION))await handle.removeEntry(old);return true;
+  const name=`dpm-backup-${envelope.createdAt.replace(/[:.]/g,"-")}.dpmx`,file=await handle.getFileHandle(name,{create:true}),writer=await file.createWritable();await writer.write(JSON.stringify(envelope));await writer.close();
+  const entries:string[]=[];for await(const [entryName] of (handle as FileSystemDirectoryHandle & {entries():AsyncIterableIterator<[string,FileSystemHandle]>}).entries())if(entryName.startsWith("dpm-backup-")&&entryName.endsWith(".dpmx"))entries.push(entryName);entries.sort().reverse();for(const old of entries.slice(BACKUP_RETENTION))await handle.removeEntry(old);return true;
 }
-export async function backupNow(state:DpmState){const snapshot=await createSnapshot(state);const external=await writeFolderBackup(state);return {snapshot,external};}
+export async function backupNow(state:DpmState){const envelope=await encryptState(state);const snapshot=await storeSnapshotEnvelope(envelope);const external=await writeFolderBackup(envelope);return {snapshot,external};}
 export function queueResilienceBackup(state:DpmState){if(typeof window==="undefined")return;queueMicrotask(()=>{void backupNow(state).catch(()=>{/* Primary save must not fail because secondary backup failed. */});});}
 export async function backupStatus(){const snapshots=await listSnapshots(),folder=await connectedFolderName();return {snapshotCount:snapshots.length,latest:snapshots[0]?.createdAt,folder};}
