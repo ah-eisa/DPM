@@ -22,6 +22,12 @@ describe("historical TWR",()=>{
     const r=calculatePerformance(s,s.clients[0],series,"2026-01-02","2026-01-05");
     expect(r.endValue).toBeCloseTo(1500);expect(r.externalFlows).toBeCloseTo(500);expect(r.twrPct).toBeCloseTo(0);
   });
+  it("does not report pre-period funding as a period cash flow",()=>{
+    const s:DpmState={...base,cashMovements:[{id:"m0",clientId:"c1",sequence:2,kind:"DEPOSIT",amount:500,currency:"USD",fxRate:1,movementDate:"2026-01-03"}]};
+    const series=[h("X","USD",[["2026-01-05",50],["2026-01-06",50]]),h("SPY","USD",[["2026-01-05",100],["2026-01-06",100]])];
+    const r=calculatePerformance(s,s.clients[0],series,"2026-01-05","2026-01-06");
+    expect(r.startValue).toBeCloseTo(1500);expect(r.externalFlows).toBe(0);expect(r.twrPct).toBeCloseTo(0);
+  });
   it("handles foreign assets using historical FX",()=>{
     const s:DpmState={...base,transactions:[{...base.transactions[0],currency:"AED",fxRate:.27,price:100}]};
     const series=[h("X","AED",[["2026-01-02",100],["2026-01-05",100]]),h("AEDUSD=X","USD",[["2026-01-02",.27],["2026-01-05",.28]]),h("SPY","USD",[["2026-01-02",100],["2026-01-05",100]])];
