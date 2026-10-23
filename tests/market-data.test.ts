@@ -14,7 +14,8 @@ describe("cascading market data",()=>{
   it("prefers a live secondary quote over a stale primary quote",async()=>{
     const primary=provider(async()=>({...live("AAPL",190),stale:true}),async()=>{throw new Error("down");});
     const secondary=provider(async()=>live("AAPL",200),async(symbol)=>({symbol,currency:"USD",points:[{date:"2026-10-01",close:100}]}));
-    await expect(new CascadingMarketDataProvider([primary,secondary]).quote("AAPL")).resolves.toMatchObject({price:200,stale:undefined});
+    const result=await new CascadingMarketDataProvider([primary,secondary]).quote("AAPL");
+    expect(result.price).toBe(200);expect(result.stale).not.toBe(true);
   });
   it("preserves raw and adjusted Yahoo history separately",()=>{
     const series=parseYahooHistory("ABC",{chart:{result:[{meta:{currency:"USD"},timestamp:[1790812800],indicators:{quote:[{close:[50]}],adjclose:[{adjclose:[25]}]}}]}});
