@@ -78,7 +78,7 @@ export function validateLedger(client: Client, transactions: Transaction[], cash
     }
     if (event.type === "action") {
       const action = event.item;
-      const p = positions.get(action.symbol)!;
+      const p = positions.get(action.symbol);
       if (!p || p.quantity < POSITION_EPSILON) fail(`${action.symbol}: corporate action has no open holding on ${action.actionDate}`);
       p.quantity *= action.factor;
       if (!Number.isFinite(p.quantity) || p.quantity <= 0) fail("Corporate action creates invalid position");
@@ -148,7 +148,8 @@ export function validateState(input: unknown): DpmState {
     cashSequences.add(sequence);
     if (!CASH_KINDS.includes(r.kind as typeof CASH_KINDS[number])) fail("Invalid cash movement kind");
     const ccy = currency(r.currency), fxRate = number(r.fxRate, "FX rate", Number.MIN_VALUE);
-    const client = clients.find(c => c.id === clientId)!;
+    const client = clients.find(c => c.id === clientId);
+    if (!client) fail("Unknown client for cash movement");
     if (ccy === client.baseCurrency && fxRate !== 1) fail("Same-currency cash movement requires FX rate 1");
     return { id, clientId, sequence, kind: r.kind, amount: number(r.amount, "cash amount", Number.MIN_VALUE), currency: ccy, fxRate, movementDate: date(r.movementDate, "movement date"), ...(r.symbol ? { symbol: symbol(r.symbol) } : {}), ...(r.reference ? { reference: str(r.reference, "reference") } : {}), ...(r.notes ? { notes: str(r.notes, "notes") } : {}) } as CashMovement;
   });
