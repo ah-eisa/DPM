@@ -1,5 +1,6 @@
 import { DpmState } from "./types";
 import { STATE_VERSION, validateState } from "./validation";
+import { queueResilienceBackup } from "./resilience";
 
 const STORAGE_KEY = "dpm-desk-state-v1";
 const RECOVERY_KEY = "dpm-desk-recovery-v1";
@@ -48,6 +49,7 @@ export function saveState(state: DpmState) {
     const previous = localStorage.getItem(STORAGE_KEY);
     if (previous) localStorage.setItem(RECOVERY_KEY, previous);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(valid));
+    queueResilienceBackup(valid);
   }
 }
 
@@ -71,7 +73,9 @@ export function resetState() {
   if (typeof window !== "undefined") {
     const previous = localStorage.getItem(STORAGE_KEY);
     if (previous) localStorage.setItem(RECOVERY_KEY, previous);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(validateState(seedState)));
+    const valid=validateState(seedState);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(valid));
+    queueResilienceBackup(valid);
   }
 }
 
