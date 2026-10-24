@@ -1,6 +1,7 @@
 const links = [
   ["Dashboard", "/"],
   ["Operations", "/operations"],
+  ["Book controls", "/controls"],
   ["Performance", "/performance"],
   ["Backup", "/backup"],
   ["Market access", "/access"],

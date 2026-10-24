@@ -5,6 +5,9 @@ A lightweight, local-first discretionary portfolio management workbench for moni
 ## Current scope
 
 - Multi-client anonymised mandates
+- Explicit accounts, Security Master and transactional schema-v4 migration
+- Custodian CSV preview and historical quantity/cash reconciliation
+- Expiring manual prices, lineage, households, saved account views and reports
 - FIFO realised/unrealised P&L
 - Cash ledger, dividends, coupons, fees and taxes
 - Corporate actions including splits and stock dividends
@@ -44,7 +47,8 @@ npm audit --audit-level=moderate
 ```text
 Browser
   DPM Desk UI
-  localStorage primary book
+  transactional IndexedDB v4 book + local change history
+  preserved legacy localStorage original (migration only)
   encrypted IndexedDB snapshots (30 retained)
   optional encrypted folder backup (.dpmx)
   FIFO / P&L / allocation / TWR engines
@@ -103,9 +107,9 @@ The `User-Agent: DPMDesk/1.0` header is set only by the server-side provider req
 
 ## Accounting and validation rules
 
-All writes, imports and loads use the same schema and ledger validation. A sale cannot exceed holdings in execution order and purchases cannot overdraw cash. `sequence` is globally unique across trades, cash movements and corporate actions. A symbol has one asset class and quote currency per client. Targets must total 100%, and holdings without configured targets appear as zero-target breaches.
+All writes, imports and loads use the same schema and ledger validation. A sale cannot exceed holdings in execution order and purchases cannot overdraw cash. `sequence` is globally unique across trades, cash movements and corporate actions. Ledger cash and holdings are validated per account. Instruments have stable security IDs and exchange/currency-qualified provider aliases; ticker text alone is insufficient when ambiguous. Targets must total 100%, and holdings without configured targets appear as zero-target breaches.
 
-Current schema version is **3**. Invalid saved data is never silently replaced by demo data. Recovery paths preserve the original raw book where possible.
+Current schema version is **4**. Invalid saved data is never silently replaced by demo data. Recovery paths preserve the original raw book where possible.
 
 The quantity floor is shared across validation, FIFO lots and performance calculations through one `POSITION_EPSILON` constant, preventing accepted dust positions from disappearing later.
 
@@ -139,7 +143,7 @@ This project is proprietary, with all rights reserved; see [LICENSE](LICENSE). P
 
 ## Phase 0 integrity update
 
-All book writes and resets now run under the cross-tab Web Lock `dpm-desk-book-write-v1` and compare an integer `revision` inside the lock. Revision-less books load as revision zero; the first accepted write adds revision one. A stale tab is rejected with a reload instruction and cannot overwrite the current book. Restore paths use the current local revision, not a revision imported from another device. Reload all older open app tabs when upgrading. Safe writes require Web Locks (current browsers on localhost or HTTPS); unsupported environments fail closed instead of falling back to an unsafe check/write sequence. The primary book remains in localStorage in phase 0. The later v4 migration will establish the account/security/change-event schema and transactional IndexedDB book storage.
+Book writes, revision checks and before/after change events now commit together in one IndexedDB readwrite transaction. This replaces the interim phase-0 Web Lock/localStorage implementation. The first load validates and migrates the old book, retaining its original raw JSON in the same transaction; localStorage is not overwritten. A stale writer fails with a reload instruction. Failed transactions do not partially update either book or history. Reload all older open tabs before upgrading: older application code still targets the legacy store. A browser-local history has an unverified actor label and is not immutable or a regulatory audit trail.
 
 Recovery-key imports add a retained key rather than replacing the device key. New encrypted envelopes include a key identifier. Old envelopes without an identifier can be opened using either the device key or retained imported keys. Export recovery key exports the active device key; retain imported key files separately for backups that originally used those keys. This is a local keyring, not enterprise key management.
 
@@ -148,3 +152,15 @@ Yahoo historical `close` is split-adjusted. The adapter now reconstructs contemp
 Zero portfolio values are processed, including full loss and final withdrawal, rather than skipping to the last positive value. Missing portfolio valuations fail explicitly. Benchmark/excess return remain unavailable unless every benchmark component has a pre-period price and FX anchor. The beginning-of-day flow convention remains an approximation of flow timing, not intraday valuation.
 
 Dashboard, Operations, Performance, Backup and Market Access are reachable from the shared header navigation. No floating overlay is added.
+
+
+## Book Controls (`/controls`)
+
+- **Master data:** each old client gets one deterministic migrated account, preserving opening cash, sequence and FIFO economics. Additional accounts start at zero and must be funded explicitly. Account base currency must match its client. Select the account/security when entering a trade, cash entry or corporate action. Legacy GTN import and master allocations target the primary account of each client; these interfaces do not infer custodian account routing.
+- **Security Master:** internal IDs stay stable when a pricing alias is corrected. Migrated exchange mappings are explicitly unresolved. ISIN has a checksum gate; screening remains unknown unless a dated source exists. `priceMultiplier` is 1 for per-unit prices, or 0.01 for percentage-of-par per face-value unit. Accrued interest is separate; clean prices do not imply dirty bond value. Instruments sharing a provider alias cannot share an automatic quote; provide a security-specific observation or correct the alias.
+- **Reconciliation:** the template starts with `security_id,symbol,currency,quantity`; optional columns are `price,reported_value,unit_multiplier,price_as_of,price_convention`. CSV has preview, SHA-256 provenance and duplicate-source protection. Observations keep effective/received dates, scope and trade-date basis. Quantity compares separately from price. Partial/unmapped sources never establish missing-at-custodian positions. Foreign cash is retained as not comparable to the book's base-currency cash. Price/value comparison requires matching currency, explicit units, same-date clean prices and a compatible manual internal price; dirty/accrued values remain not comparable. Reviews record a reason without editing the ledger. Revised source files can supersede earlier observations.
+- **Prices:** active manual overrides outrank market quotes until expiry; latest effective time wins, then recorded time and ID. Source, reason, effective time, recorded time and rejected alternatives remain visible. Zero is a valid price. Historical TWR remains based on provider history; a current override does not rewrite history.
+- **Groups/reports:** households and saved views contain unique account memberships, not legal ownership or fractional look-through. Reports keep currencies separate. As-of account reports use the historical ledger and valid manual prices; missing prices show indicative FIFO cost, never an invented market value. CSV is formula-safe. Print/Save PDF uses the browser. Fee support is an explicitly labelled Actual/365 single-value estimate; it creates no invoice, charge or ledger entry. Performance fees, high-water marks and production billing remain outside this release.
+- **History/recovery:** every accepted change stores full before/after states atomically with the book. Export local history or the original migration JSON. Full book exports/encrypted backups retain v4 controls; the portable book limit is 5 MB. History remains device-local and is not carried into portable book backups. Browser storage can be cleared or lost; keep external backups and recovery keys.
+
+See [implementation phases](docs/implementation-phases.md) for scope and release evidence. This release does not introduce a multi-user backend, verified operator identity, settlement accounting, a universal custodian feed, ownership look-through, CRM/KYC or Arabic localisation.

@@ -7,3 +7,6 @@ input,select{font:inherit;color:inherit;background:var(--input);border:1px solid
 [data-theme="light"] .app{background:var(--canvas)}[data-theme="light"] .tab.active,[data-theme="light"] .btn.primary{color:#ffffff}[data-theme="light"] .brandmark{background:#195a99;color:#ffffff}[data-theme="light"] .bar span{background:#3577b4}[data-theme="light"] .dot{background:#16704f}
 
 .workspace-links a{text-decoration:none}.topbar{flex-wrap:wrap;gap:12px}.workspace-links{justify-content:flex-start}
+
+.controls .card{min-width:0}.controls .mono{overflow-wrap:anywhere}.controls fieldset{border:1px solid var(--border);border-radius:10px;margin:16px 0;padding:12px}.controls .row input[type="checkbox"]{width:auto;min-height:24px}
+@media print{.controls{background:white!important;color:black!important}.controls .topbar,.controls .tabs,.controls .notice,.controls .report button,.controls .report form,.controls .report h3,.controls .report h3+p{display:none!important}.controls .report{border:0;box-shadow:none;background:white;color:black}.controls .container{max-width:none;padding:0}.controls .table-scroll{overflow:visible}.controls .muted{color:#333}}

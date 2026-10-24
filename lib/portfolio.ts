@@ -1,3 +1,5 @@
+import { selectPrices } from "./price-policy";
+import { bookView } from "./book-view";
 import { POSITION_EPSILON } from "./constants";
 import { CashMovement, Client, DpmState, Holding, PortfolioSummary, Quote, Transaction } from "./types";
 import { orderedLedgerEvents, validateLedger } from "./validation";
@@ -10,7 +12,7 @@ function movementDelta(m: CashMovement) {
   return ["WITHDRAWAL", "FEE", "TAX"].includes(m.kind) ? -value : value;
 }
 
-export function buildPortfolio(
+function buildPortfolioCore(
   client: Client,
   state: DpmState,
   quotes: Record<string, Quote>
@@ -90,6 +92,9 @@ export function buildPortfolio(
     const stale = quote?.stale || fx?.stale || [quote, fx].some(q => q && (!Number.isFinite(Date.parse(q.asOf)) || Date.now() - Date.parse(q.asOf) > 24 * 60 * 60 * 1000));
     rawHoldings.push({
       symbol,
+      priceSource: hasPrice ? quote.source : undefined,
+      priceAsOf: hasPrice ? quote.asOf : undefined,
+      priceChangePct: hasPrice ? quote.changePct : undefined,
       name: meta.name,
       assetClass: meta.assetClass,
       quantity,
@@ -171,4 +176,9 @@ export function driftForClient(state: DpmState, summary: PortfolioSummary) {
 export function aggregateAum(summaries: PortfolioSummary[]) {
   if (new Set(summaries.map(p => p.client.baseCurrency)).size > 1) throw new Error("Cannot aggregate different base currencies");
   return summaries.reduce((sum, p) => sum + p.marketValue, 0);
+}
+
+export function buildPortfolio(client:Client,state:DpmState,quotes:Record<string,Quote>):PortfolioSummary {
+  const view=bookView(state,selectPrices(state,quotes).quotes);const result=buildPortfolioCore(client,view.state,view.quotes);
+  return {...result,holdings:result.holdings.map(h=>({...h,...view.labels.get(h.symbol)}))};
 }

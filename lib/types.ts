@@ -26,6 +26,8 @@ export interface Transaction {
   sequence?: number;
   currency?: string;
   id: string;
+  accountId?: string;
+  securityId?: string;
   clientId: string;
   symbol: string;
   name?: string;
@@ -42,6 +44,8 @@ export interface Transaction {
 
 export interface CashMovement {
   id: string;
+  accountId?: string;
+  securityId?: string;
   clientId: string;
   sequence: number;
   kind: CashMovementKind;
@@ -56,6 +60,8 @@ export interface CashMovement {
 
 export interface CorporateAction {
   id: string;
+  accountId?: string;
+  securityId?: string;
   clientId: string;
   sequence: number;
   kind: CorporateActionKind;
@@ -86,7 +92,27 @@ export interface Quote {
   source: string;
 }
 
+export interface Account {
+  id: string; clientId: string; label: string; custodian: string; baseCurrency: string; initialCash: number;
+}
+export interface Security {
+  id: string; symbol: string; name: string; exchange: string; currency: string; assetClass: AssetClass;
+  isin?: string; priceMultiplier: number; shariaStatus: "unknown" | "screened"; shariaSource?: string; shariaDate?: string;
+}
+export interface CustodianObservation {
+  id: string; accountId: string; effectiveDate: string; receivedAt: string; source: string; sourceHash: string;
+  scope: "partial" | "complete"; basis: "trade-date"; rows: { securityId?: string; symbol: string; currency: string; quantity: number; price?: number; reportedValue?: number; unitMultiplier?: number; priceAsOf?: string; priceConvention?: "clean" | "dirty" }[];
+  cash?: number; cashCurrency?: string; supersedesId?: string;
+}
+export interface BreakReview { id: string; observationId: string; key: string; status: "accepted" | "resolved"; reason: string; recordedAt: string; }
+export interface PriceOverride { id: string; securityId: string; price: number; currency: string; effectiveAt: string; expiresAt: string; recordedAt: string; source: string; reason: string; }
+export interface Household { id: string; label: string; accountIds: string[]; }
+export interface SavedView { id: string; label: string; accountIds: string[]; }
+export interface BookControls { accounts: Account[]; securities: Security[]; observations: CustodianObservation[]; reviews: BreakReview[]; overrides: PriceOverride[]; households: Household[]; views: SavedView[]; }
+export interface BookChange { id: string; revisionBefore: number; revisionAfter: number; recordedAt: string; action: string; actor: "Local operator (unverified)"; before: DpmState | null; after: DpmState; }
+
 export interface DpmState {
+  controls?: BookControls;
   revision?: number;
   version?: number;
   clients: Client[];
@@ -97,6 +123,11 @@ export interface DpmState {
 }
 
 export interface Holding {
+  priceSource?: string;
+  priceAsOf?: string;
+  priceChangePct?: number;
+  securityId?: string;
+  accountId?: string;
   valuationStatus: "live" | "stale" | "cost";
   valuationNote?: string;
   symbol: string;

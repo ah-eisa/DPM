@@ -20,22 +20,22 @@ export default function OperationsPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [theme, setTheme] = useState<"dark"|"light">("dark");
-  const [cash, setCash] = useState({clientId:"c001",kind:"DEPOSIT" as CashMovementKind,amount:"",currency:"USD",fxRate:"1",movementDate:today(),symbol:"",reference:"",notes:""});
-  const [action, setAction] = useState({clientId:"c001",kind:"SPLIT" as CorporateActionKind,symbol:"",factor:"2",actionDate:today(),reference:"",notes:""});
+  const [cash, setCash] = useState({clientId:"c001",accountId:"",kind:"DEPOSIT" as CashMovementKind,amount:"",currency:"USD",fxRate:"1",movementDate:today(),symbol:"",reference:"",notes:""});
+  const [action, setAction] = useState({clientId:"c001",accountId:"",securityId:"",kind:"SPLIT" as CorporateActionKind,symbol:"",factor:"2",actionDate:today(),reference:"",notes:""});
   const [master, setMaster] = useState({symbol:"",name:"",assetClass:"US Equity" as AssetClass,side:"BUY" as Side,totalQuantity:"",price:"",fees:"0",currency:"USD",fxRate:"1",tradeDate:today(),gtnRef:"",notes:""});
   const [allocations, setAllocations] = useState<Record<string,string>>({});
 
   useEffect(() => {
     setTheme(document.documentElement.dataset.theme === "light" ? "light" : "dark");
-    try {
-      const book = loadState();
+    void (async()=>{try {
+      const book = await loadState();
       adoptLoadedBook(book);
       setReady(true);
     } catch (e) {
       setError((e as Error).message);
       setLoadBlocked(true);
       setReady(true);
-    }
+    }})();
   }, []);
 
   function toggleTheme() {
@@ -78,7 +78,7 @@ export default function OperationsPage() {
 
   async function recoverPrevious() {
     try {
-      const previous = recoverState();
+      const previous = await recoverState();
       const saved = await saveState(previous,{expectedRevision:state.revision ?? 0,recovery:loadBlocked});
       adoptLoadedBook(saved);
       setMessage("Previous validated save recovered");
@@ -90,13 +90,13 @@ export default function OperationsPage() {
 
   async function addCash(e: FormEvent) {
     e.preventDefault(); if (!activeCashClient) return;
-    const item: CashMovement = { id:uid("cash"),clientId:cash.clientId,sequence:maxLedgerSequence(state)+1,kind:cash.kind,amount:Number(cash.amount),currency:cash.currency.toUpperCase(),fxRate:Number(cash.fxRate),movementDate:cash.movementDate,symbol:cash.symbol.trim().toUpperCase()||undefined,reference:cash.reference.trim()||undefined,notes:cash.notes.trim()||undefined };
+    const item: CashMovement = { id:uid("cash"),clientId:cash.clientId,...(cash.accountId?{accountId:cash.accountId}:{}),sequence:maxLedgerSequence(state)+1,kind:cash.kind,amount:Number(cash.amount),currency:cash.currency.toUpperCase(),fxRate:Number(cash.fxRate),movementDate:cash.movementDate,symbol:cash.symbol.trim().toUpperCase()||undefined,reference:cash.reference.trim()||undefined,notes:cash.notes.trim()||undefined };
     if (await commit({...state,cashMovements:[...state.cashMovements,item]}, `${cash.kind} recorded`)) setCash(c=>({...c,amount:"",symbol:"",reference:"",notes:""}));
   }
 
   async function addAction(e: FormEvent) {
     e.preventDefault();
-    const item: CorporateAction = { id:uid("ca"),clientId:action.clientId,sequence:maxLedgerSequence(state)+1,kind:action.kind,symbol:action.symbol.trim().toUpperCase(),actionDate:action.actionDate,factor:Number(action.factor),reference:action.reference.trim()||undefined,notes:action.notes.trim()||undefined };
+    const item: CorporateAction = { id:uid("ca"),clientId:action.clientId,...(action.securityId?{securityId:action.securityId}:{}),...(action.accountId?{accountId:action.accountId}:{}),sequence:maxLedgerSequence(state)+1,kind:action.kind,symbol:action.symbol.trim().toUpperCase(),actionDate:action.actionDate,factor:Number(action.factor),reference:action.reference.trim()||undefined,notes:action.notes.trim()||undefined };
     if (await commit({...state,corporateActions:[...state.corporateActions,item]}, `${action.kind} recorded`)) setAction(a=>({...a,symbol:"",reference:"",notes:""}));
   }
 
@@ -125,7 +125,7 @@ export default function OperationsPage() {
 
   if(loadBlocked) return <main className="app">
     <header className="topbar operations-topbar"><div className="brand"><div className="brandmark">O</div><div><h1>DPM Operations</h1><div className="muted small">Recovery mode</div></div></div><div className="row"><button className="btn" onClick={toggleTheme}>{theme==="dark"?"Light mode":"Dark mode"}</button><WorkspaceLinks current="/operations" /></div></header>
-    <div className="container"><section className="card"><h2>Saved book could not be loaded</h2><div className="notice negative" role="alert">{error}</div><p className="muted">All operational writes are blocked. The demo state is not writable and will not replace the saved book.</p><div className="row"><button className="btn" onClick={()=>{try{downloadSavedBook();}catch(e){setError((e as Error).message);}}}>Download original saved book</button><button className="btn" onClick={recoverPrevious}>Recover previous save</button><label className="btn primary">Restore validated backup<input hidden type="file" accept="application/json" onChange={restoreBackup}/></label></div></section></div>
+    <div className="container"><section className="card"><h2>Saved book could not be loaded</h2><div className="notice negative" role="alert">{error}</div><p className="muted">All operational writes are blocked. The demo state is not writable and will not replace the saved book.</p><div className="row"><button className="btn" onClick={async()=>{try{await downloadSavedBook();}catch(e){setError((e as Error).message);}}}>Download original saved book</button><button className="btn" onClick={recoverPrevious}>Recover previous save</button><label className="btn primary">Restore validated backup<input hidden type="file" accept="application/json" onChange={restoreBackup}/></label></div></section></div>
   </main>;
 
   return <main className="app">
@@ -135,13 +135,13 @@ export default function OperationsPage() {
       {error&&<div className="notice negative" role="alert">{error}</div>}{message&&<div className="notice positive" role="status">{message}</div>}
       <div className="grid two">
         <section className="card"><div className="section-title"><h2>Cash ledger</h2><span className="pill">Base-currency accounting</span></div><form className="form-grid" onSubmit={addCash}>
-          <Field label="Client"><select value={cash.clientId} onChange={e=>{const c=clientById.get(e.target.value);setCash({...cash,clientId:e.target.value,currency:c?.baseCurrency??"USD",fxRate:"1"});}}>{state.clients.map(c=><option key={c.id} value={c.id}>{c.code} / {c.baseCurrency}</option>)}</select></Field>
-          <Field label="Type"><select value={cash.kind} onChange={e=>setCash({...cash,kind:e.target.value as CashMovementKind})}>{CASH_KINDS.map(k=><option key={k}>{k}</option>)}</select></Field>
+          <Field label="Client"><select value={cash.clientId} onChange={e=>{const c=clientById.get(e.target.value);setCash({...cash,clientId:e.target.value,accountId:"",currency:c?.baseCurrency??"USD",fxRate:"1"});}}>{state.clients.map(c=><option key={c.id} value={c.id}>{c.code} / {c.baseCurrency}</option>)}</select></Field>
+          <Field label="Account"><select value={cash.accountId} onChange={e=>setCash({...cash,accountId:e.target.value})}><option value="">Primary account</option>{state.controls?.accounts.filter(a=>a.clientId===cash.clientId).map(a=><option key={a.id} value={a.id}>{a.label}</option>)}</select></Field><Field label="Type"><select value={cash.kind} onChange={e=>setCash({...cash,kind:e.target.value as CashMovementKind})}>{CASH_KINDS.map(k=><option key={k}>{k}</option>)}</select></Field>
           <Field label="Amount"><input required type="number" min="0" step="any" value={cash.amount} onChange={e=>setCash({...cash,amount:e.target.value})}/></Field><Field label="Currency"><input required maxLength={3} value={cash.currency} onChange={e=>setCash({...cash,currency:e.target.value.toUpperCase()})}/></Field><Field label="FX to base"><input required type="number" min="0" step="any" value={cash.fxRate} onChange={e=>setCash({...cash,fxRate:e.target.value})}/></Field><Field label="Date"><input required type="date" value={cash.movementDate} onChange={e=>setCash({...cash,movementDate:e.target.value})}/></Field><Field label="Symbol (optional)"><input value={cash.symbol} onChange={e=>setCash({...cash,symbol:e.target.value})} placeholder="AAPL"/></Field><Field label="Reference"><input value={cash.reference} onChange={e=>setCash({...cash,reference:e.target.value})}/></Field><Field label="Notes"><input value={cash.notes} onChange={e=>setCash({...cash,notes:e.target.value})}/></Field><div className="field" style={{alignSelf:"end"}}><button className="btn primary">Add cash entry</button></div>
         </form></section>
 
         <section className="card"><div className="section-title"><h2>Corporate action</h2><span className="pill">Quantity multiplier</span></div><form className="form-grid" onSubmit={addAction}>
-          <Field label="Client"><select value={action.clientId} onChange={e=>setAction({...action,clientId:e.target.value})}>{state.clients.map(c=><option key={c.id} value={c.id}>{c.code}</option>)}</select></Field><Field label="Action"><select value={action.kind} onChange={e=>setAction({...action,kind:e.target.value as CorporateActionKind})}>{ACTION_KINDS.map(k=><option key={k}>{k}</option>)}</select></Field><Field label="Symbol"><input required value={action.symbol} onChange={e=>setAction({...action,symbol:e.target.value})}/></Field><Field label="Factor"><input required type="number" min="0" step="any" value={action.factor} onChange={e=>setAction({...action,factor:e.target.value})}/></Field><Field label="Date"><input required type="date" value={action.actionDate} onChange={e=>setAction({...action,actionDate:e.target.value})}/></Field><Field label="Reference"><input value={action.reference} onChange={e=>setAction({...action,reference:e.target.value})}/></Field><Field label="Notes"><input value={action.notes} onChange={e=>setAction({...action,notes:e.target.value})}/></Field><div className="field" style={{alignSelf:"end"}}><button className="btn primary">Apply action</button></div>
+          <Field label="Client"><select value={action.clientId} onChange={e=>setAction({...action,clientId:e.target.value,accountId:""})}>{state.clients.map(c=><option key={c.id} value={c.id}>{c.code}</option>)}</select></Field><Field label="Account"><select value={action.accountId} onChange={e=>setAction({...action,accountId:e.target.value})}><option value="">Primary account</option>{state.controls?.accounts.filter(a=>a.clientId===action.clientId).map(a=><option key={a.id} value={a.id}>{a.label}</option>)}</select></Field><Field label="Security Master instrument"><select value={action.securityId} onChange={e=>{const security=state.controls?.securities.find(s=>s.id===e.target.value);setAction({...action,securityId:e.target.value,symbol:security?.symbol??action.symbol});}}><option value="">Resolve symbol</option>{state.controls?.securities.map(s=><option key={s.id} value={s.id}>{s.name} / {s.exchange}</option>)}</select></Field><Field label="Action"><select value={action.kind} onChange={e=>setAction({...action,kind:e.target.value as CorporateActionKind})}>{ACTION_KINDS.map(k=><option key={k}>{k}</option>)}</select></Field><Field label="Symbol"><input required value={action.symbol} onChange={e=>setAction({...action,symbol:e.target.value})}/></Field><Field label="Factor"><input required type="number" min="0" step="any" value={action.factor} onChange={e=>setAction({...action,factor:e.target.value})}/></Field><Field label="Date"><input required type="date" value={action.actionDate} onChange={e=>setAction({...action,actionDate:e.target.value})}/></Field><Field label="Reference"><input value={action.reference} onChange={e=>setAction({...action,reference:e.target.value})}/></Field><Field label="Notes"><input value={action.notes} onChange={e=>setAction({...action,notes:e.target.value})}/></Field><div className="field" style={{alignSelf:"end"}}><button className="btn primary">Apply action</button></div>
         </form><p className="muted small">2-for-1 split = 2.0, 1-for-2 reverse split = 0.5, 10% stock dividend = 1.1. Cost basis is preserved.</p></section>
 
         <section className="card full"><div className="section-title"><h2>Master trade allocation</h2><span className="pill">One execution → many clients</span></div><form onSubmit={addBulk}><div className="form-grid">

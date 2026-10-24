@@ -17,9 +17,9 @@ function historyStartFor(start:string){const d=new Date(`${start}T00:00:00Z`);d.
 export default function PerformancePage(){
   const [state,setState]=useState<DpmState>(seedState);const [ready,setReady]=useState(false);const [error,setError]=useState("");const [clientId,setClientId]=useState("c001");const [range,setRange]=useState("1Y");const [result,setResult]=useState<PerformanceResult|null>(null);const [status,setStatus]=useState("");
   const requestId=useRef(0);const controller=useRef<AbortController|null>(null);
-  useEffect(()=>{try{const s=loadState();setState(s);setClientId(s.clients[0].id);setReady(true);}catch(e){setError((e as Error).message);}return()=>controller.current?.abort();},[]);
+  useEffect(()=>{void (async()=>{try{const s=await loadState();setState(s);setClientId(s.clients[0].id);setReady(true);}catch(e){setError((e as Error).message);}})();return()=>controller.current?.abort();},[]);
   const client=state.clients.find(c=>c.id===clientId)??state.clients[0];
-  const symbols=useMemo(()=>{if(!client)return[];const s=new Set(state.transactions.filter(t=>t.clientId===client.id).map(t=>t.symbol.toUpperCase()));for(const b of parseBenchmark(client.benchmark))s.add(b.symbol);return [...s];},[state,client]);
+  const symbols=useMemo(()=>{if(!client)return[];const s=new Set(state.transactions.filter(t=>t.clientId===client.id).map(t=>(state.controls?.securities.find(s=>s.id===t.securityId)?.symbol??t.symbol).toUpperCase()));for(const b of parseBenchmark(client.benchmark))s.add(b.symbol);return [...s];},[state,client]);
 
   async function run(){
     if(!client)return;

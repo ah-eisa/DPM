@@ -1,5 +1,7 @@
+import { previewMigration } from "./migration";
+import { readRawBook, readBookMeta, transactBook } from "./book-store";
 import { DpmState } from "./types";
-import { STATE_VERSION, validateState } from "./validation";
+import { validateState } from "./validation";
 import { queueResilienceBackup } from "./resilience";
 
 const STORAGE_KEY = "dpm-desk-state-v1";
@@ -7,7 +9,7 @@ const RECOVERY_KEY = "dpm-desk-recovery-v1";
 
 export const seedState: DpmState = {
   revision: 0,
-  version: STATE_VERSION,
+  version: 3,
   clients: [
     { id: "c001", code: "C001", label: "Balanced Mandate", baseCurrency: "USD", benchmark: "60% SPY / 40% BND", riskProfile: "Balanced", initialCash: 500000 },
     { id: "c002", code: "C002", label: "Growth Mandate", baseCurrency: "USD", benchmark: "SPY", riskProfile: "Growth", initialCash: 750000 },
@@ -34,35 +36,20 @@ export const seedState: DpmState = {
   ],
 };
 
-export function loadState(): DpmState {
-  if (typeof window === "undefined") return seedState;
+export async function loadState():Promise<DpmState> {
+  if(typeof window === "undefined")return validateState(seedState);
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return validateState(raw ? JSON.parse(raw) : seedState);
-  } catch (error) {
-    throw new Error(`Saved book could not be loaded. It has not been overwritten. ${error instanceof Error ? error.message : "Invalid data"}`);
-  }
+    const current=await readRawBook();if(current!==undefined)return validateState(current);
+    const raw=localStorage.getItem(STORAGE_KEY),candidate=previewMigration(raw?JSON.parse(raw):seedState).candidate;
+    return await transactBook(candidate,0,{migration:true,original:raw});
+  }catch(error){throw Error(`Saved book could not be loaded. It has not been overwritten. ${error instanceof Error?error.message:"Invalid data"}`);}
 }
-
-export async function saveState(state: DpmState, options: { expectedRevision?: number; recovery?: boolean } = {}): Promise<DpmState> {
-  const candidate = validateState(state);
-  if (typeof window === "undefined") return candidate;
-  if (!navigator.locks) throw new Error("Safe book writes require Web Locks support. Open this app in an up-to-date browser on localhost or HTTPS.");
-  return navigator.locks.request("dpm-desk-book-write-v1", async () => {
-    const previous = localStorage.getItem(STORAGE_KEY);
-    let currentRevision = 0;
-    if (previous) {
-      try { currentRevision = validateState(JSON.parse(previous)).revision ?? 0; }
-      catch { if (!options.recovery) throw new Error("Saved book is invalid. Use recovery mode before writing."); }
-    }
-    if (currentRevision !== (options.expectedRevision ?? candidate.revision ?? 0)) throw new Error("This book changed in another tab. Reload before retrying; your changes have not been saved.");
-    const valid = { ...candidate, revision: currentRevision + 1 };
-    if (!Number.isSafeInteger(valid.revision)) throw new Error("Book revision limit reached");
-    if (previous) localStorage.setItem(RECOVERY_KEY, previous);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(valid));
-    queueResilienceBackup(valid);
-    return valid;
-  });
+export async function saveState(state:DpmState,options:{expectedRevision?:number;recovery?:boolean;action?:string}={}):Promise<DpmState>{
+  const candidate=validateState(state);if(typeof window === "undefined")return candidate;
+  const current=await readRawBook();
+  if(current===undefined&&!options.recovery)await loadState();
+  const valid=await transactBook(candidate,options.expectedRevision??candidate.revision??0,{recovery:options.recovery,action:options.action,...(current===undefined?{original:localStorage.getItem(STORAGE_KEY)}:{})});
+  queueResilienceBackup(valid);return valid;
 }
 
 export function exportState(state: DpmState) {
@@ -85,14 +72,16 @@ export async function resetState(expectedRevision: number) {
   return saveState(seedState, { expectedRevision });
 }
 
-export function recoverState(): DpmState {
+export async function recoverState(): Promise<DpmState> {
+  const previous=await readBookMeta("previous");if(previous!==undefined)return validateState(previous);
   const raw = localStorage.getItem(RECOVERY_KEY);
   if (!raw) throw new Error("No previous saved book available");
   return validateState(JSON.parse(raw));
 }
 
-export function downloadSavedBook() {
-  const raw = localStorage.getItem(STORAGE_KEY);
+export async function downloadSavedBook() {
+  const saved=await readRawBook();
+  const raw = saved===undefined?localStorage.getItem(STORAGE_KEY):JSON.stringify(saved);
   if (!raw) throw new Error("No saved book available");
   const url = URL.createObjectURL(new Blob([raw], { type: "application/json" }));
   const a = document.createElement("a");

@@ -1,27 +1,25 @@
 # DPM implementation phases
 
-## Phase 0: integrity foundation
+## Phase 0 — integrity foundation
 
-Implemented:
-- Revision-checked writes serialized across tabs using Web Locks. Stale writes fail with a reload message; recovery explicitly preserves the original book.
-- Imported recovery keys are retained separately instead of replacing the active device key. Legacy envelopes remain decryptable.
-- Yahoo split-adjusted closes are reconstructed into contemporaneous share units before ledger corporate actions are applied. Daily bars avoid weekly event-date look-ahead.
-- Complete capital loss is valued at zero; a full withdrawal is not classified as investment loss.
-- Missing required valuations stop performance calculation. Missing benchmark opening anchors suppress benchmark and excess return.
-- Shared navigation connects Dashboard, Operations, Performance, Backup and Market Access.
+Completed: stale-tab protection; retained recovery keys; contemporaneous Yahoo split prices; daily historical observations; zero-ending-value TWR; explicit missing-valuation/benchmark anchors; shared navigation. The temporary Web Lock/localStorage writer is superseded by phase 1 below.
 
-Validation: 116 unit/regression tests; lint; TypeScript; production build; dependency audit. Browser checks use synthetic state on a separate localhost origin: stale-tab rejection, reload/retry preserving both entries, navigation, and 390px layout. Protected market APIs require deployment configuration; no live authenticated provider performance run is claimed.
+## Phase 1 — v4 and transactional persistence
 
-Upgrade: reload every open DPM tab before writing. Web Locks requires a current browser on localhost or HTTPS. The primary book remains in localStorage in this phase; encrypted snapshots remain in IndexedDB. Backup exports remain essential for device-loss recovery.
+Implemented schema-v4 validation/migration; explicit accounts; stable Security Master IDs and pricing mappings; per-account cash and holding checks; explicit price multipliers; transactional IndexedDB book/revision/before-and-after history. The original v3 JSON remains untouched and is retained in migration metadata. Tests cover simultaneous migration/writes, stale revisions, simulated history-write failure rolling back the entire book transaction, and fixed-price migration economics.
 
-## Phase 1: normalized book and transactional persistence
+## Phase 2 — custodian observations
 
-Next: schema v4 with backward-compatible migration; Security Master; explicit accounts; transactional IndexedDB primary book and change history. Migration must preserve the original book and be validated before activation. Test rollback, old-book migration, identifier collisions and atomic book/history writes before shipping.
+Implemented strict documented CSV template, optional compatible clean-price/value fields, preview and instrument mapping, effective/received dates, SHA-256 source lineage, duplicate-source rejection, superseding observation references, historical account reconciliation, partial/complete scope, absolute/relative tolerances and reasoned break reviews. Observations do not mutate the ledger. Native foreign-currency cash and dirty/accrued values are explicitly not comparable rather than guessed. Settlement-date observations need normalisation before import.
 
-## Phase 2: reconciliation
+## Phase 3 — governed prices and reporting groups
 
-Custodian snapshots and position/cash reconciliation, with explicit as-of dates, tolerances, unmatched identifiers and review states. Importing a snapshot must not silently rewrite the ledger.
+Implemented expiring manual price policy and selection lineage, unique-account households and saved views, per-currency historical account valuation reports, CSV and browser printing. Missing manual prices remain indicative cost. Current overrides affect current portfolio valuation; they do not silently change historical TWR. Reports include as-of date, selected accounts and revision.
 
-## Phase 3: governed adjustments and grouping
+Fee support is a bounded Actual/365 estimate only. Automatic billing, high-water marks, performance-fee crystallisation, fractional ownership, custom-attribute query builders, verified operator identity and server-side multi-user persistence remain separate future specifications.
 
-Overrides with source lineage and effective dates, household grouping without double-counting, then configurable reports and fee workflows. Each stage requires accounting regression tests and browser verification before publication.
+## Release checks
+
+Automated coverage includes migrated FIFO/cash/P&L, account isolation, same-ticker instrument ambiguity, split scope, percentage-of-par multipliers, duplicate CSV, historical scope, native foreign-cash not-comparable handling, clean/dirty value compatibility, override expiry/zero/currency, group double counting, formula-safe export, encrypted v4 round trips, IDB concurrency and atomic failure rollback. Run tests, lint, TypeScript, production build and audit before publishing.
+
+Browser checks use synthetic state on a separate localhost origin. Account creation, accepted observation preview, grouping/reporting, reload persistence, change history, navigation and light/dark 390px layouts were checked. This does not assert live authenticated provider availability or Arabic/RTL support. Reload all old application tabs on upgrade and keep an exported backup for rollback to the old application; old code writes only the preserved legacy store.

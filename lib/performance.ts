@@ -1,3 +1,4 @@
+import { bookView } from "./book-view";
 import { POSITION_EPSILON } from "./constants";
 import { Client, CorporateAction, DpmState, Transaction } from "./types";
 import { orderedLedgerEvents } from "./validation";
@@ -86,7 +87,7 @@ function isExternal(kind: string) {
   return !["DIVIDEND", "COUPON", "INTEREST", "FEE", "TAX"].includes(kind);
 }
 
-export function calculatePerformance(state: DpmState, client: Client, series: HistorySeries[], startDate: string, endDate: string): PerformanceResult {
+function calculatePerformanceCore(state: DpmState, client: Client, series: HistorySeries[], startDate: string, endDate: string): PerformanceResult {
   const history = seriesMap(series);
   const symbols = new Set(state.transactions.filter(t => t.clientId === client.id).map(t => key(t.symbol)));
   const benchmark = parseBenchmark(client.benchmark);
@@ -142,7 +143,7 @@ export function calculatePerformance(state: DpmState, client: Client, series: Hi
     const s = history.get(symbol);
     const close = s ? latestBefore(s.points, startDate, false) : undefined;
     const fx = s ? fxBefore(s.currency, client.baseCurrency, startDate, history) : undefined;
-    if (!close || !fx) throw new Error(`Opening valuation unavailable for ${symbol}; include a pre-period price anchor`);
+    if (close == null || !fx || s?.currency!==p.currency) throw new Error(`Opening valuation unavailable for ${symbol}; include a pre-period price anchor`);
     openingValue += p.quantity * close * fx;
   }
   if (!Number.isFinite(openingValue) || openingValue < 0) throw new Error("Opening portfolio value is invalid");
@@ -174,7 +175,7 @@ export function calculatePerformance(state: DpmState, client: Client, series: Hi
       const s = history.get(symbol);
       const close = s ? latestAt(s.points, date, false) : undefined;
       const fx = s ? fxAt(s.currency, client.baseCurrency, date, history) : undefined;
-      if (close == null || !fx) { complete = false; break; }
+      if (close == null || !fx || s?.currency!==p.currency) { complete = false; break; }
       value += p.quantity * close * fx;
     }
     if (!complete) throw new Error(`Incomplete portfolio valuation on ${date}; historical performance cannot be safely calculated`);
@@ -206,4 +207,8 @@ export function calculatePerformance(state: DpmState, client: Client, series: Hi
     benchmarkLabel: client.benchmark,
     flowConvention: "beginning-of-day"
   };
+}
+
+export function calculatePerformance(state:DpmState,client:Client,series:HistorySeries[],startDate:string,endDate:string):PerformanceResult {
+  const view=bookView(state,{},series);return calculatePerformanceCore(view.state,client,view.history,startDate,endDate);
 }
