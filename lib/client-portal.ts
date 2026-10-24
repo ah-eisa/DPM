@@ -110,6 +110,11 @@ function requireIso(value: string, field: string) {
     throw new Error(`${field} must be a valid timestamp`);
 }
 
+function requireDate(value: string, field: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(`${value}T00:00:00.000Z`)))
+    throw new Error(`${field} must be a valid YYYY-MM-DD date`);
+}
+
 function accountFor(state: DpmState, clientId: string, accountId: string) {
   const account = state.controls?.accounts.find((a) => a.id === accountId);
   if (!account) throw new Error(`Unknown account ${accountId}`);
@@ -138,20 +143,34 @@ function requireAccountBoundEvents(state: DpmState, clientId: string) {
     );
 }
 
+function snapshotDate(publishedAt: string) {
+  return new Date(Date.parse(publishedAt)).toISOString().slice(0, 10);
+}
+
 function scopeStateToAccount(
   state: DpmState,
   client: Client,
   account: Account,
+  asOfDate: string,
 ): DpmState {
   requireAccountBoundEvents(state, client.id);
   const transactions = state.transactions.filter(
-    (x) => x.clientId === client.id && x.accountId === account.id,
+    (x) =>
+      x.clientId === client.id &&
+      x.accountId === account.id &&
+      x.tradeDate <= asOfDate,
   );
   const cashMovements = state.cashMovements.filter(
-    (x) => x.clientId === client.id && x.accountId === account.id,
+    (x) =>
+      x.clientId === client.id &&
+      x.accountId === account.id &&
+      x.movementDate <= asOfDate,
   );
   const corporateActions = state.corporateActions.filter(
-    (x) => x.clientId === client.id && x.accountId === account.id,
+    (x) =>
+      x.clientId === client.id &&
+      x.accountId === account.id &&
+      x.actionDate <= asOfDate,
   );
   const securityIds = new Set(
     [...transactions, ...cashMovements, ...corporateActions]
@@ -162,11 +181,11 @@ function scopeStateToAccount(
     ? {
         ...state.controls,
         accounts: [account],
-        securities: state.controls.securities.filter((x) =>
-          securityIds.has(x.id),
-        ),
+        // Keep the complete security master so ticker ambiguity is preserved.
+        // Output is still account-scoped and lineage is filtered before publishing.
+        securities: state.controls.securities,
         observations: state.controls.observations.filter(
-          (x) => x.accountId === account.id,
+          (x) => x.accountId === account.id && x.effectiveDate <= asOfDate,
         ),
         overrides: state.controls.overrides.filter((x) =>
           securityIds.has(x.securityId),
@@ -216,11 +235,12 @@ export function buildClientPortalSnapshot(
   if (!input.state.controls)
     throw new Error("Client portal publishing requires a v4 controlled book");
 
+  const asOfDate = snapshotDate(input.publishedAt);
   const client = input.state.clients.find((x) => x.id === input.clientId);
   if (!client) throw new Error(`Unknown client ${input.clientId}`);
   const account = accountFor(input.state, input.clientId, input.accountId);
   const portalClient = scopedClient(client, account);
-  const scoped = scopeStateToAccount(input.state, client, account);
+  const scoped = scopeStateToAccount(input.state, client, account, asOfDate);
   const selection = selectPrices(scoped, input.quotes, input.publishedAt);
   const summary = buildPortfolio(
     portalClient,
@@ -242,6 +262,12 @@ export function buildClientPortalSnapshot(
   if (input.performancePeriod) {
     if (!input.history)
       throw new Error("history is required when performancePeriod is requested");
+    requireDate(input.performancePeriod.startDate, "performancePeriod.startDate");
+    requireDate(input.performancePeriod.endDate, "performancePeriod.endDate");
+    if (input.performancePeriod.startDate > input.performancePeriod.endDate)
+      throw new Error("performancePeriod startDate must not be after endDate");
+    if (input.performancePeriod.endDate > asOfDate)
+      throw new Error("performancePeriod endDate cannot be after snapshot publishedAt date");
     performance = portalPerformance(
       calculatePerformance(
         scoped,
