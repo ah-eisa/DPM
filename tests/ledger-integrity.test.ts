@@ -28,7 +28,7 @@ describe("global ledger sequencing", () => {
       cashMovements:[],
       corporateActions:[{id:"a1",clientId:"c1",sequence:1,kind:"SPLIT",symbol:"AAPL",actionDate:"2026-10-21",factor:2}],
     };
-    expect(() => validateState(state)).toThrow(/ledger sequence must be globally unique/i);
+    expect(() => validateState({...state,version:4,controls:validateState(base).controls})).toThrow(/ledger sequence must be globally unique/i);
   });
 });
 

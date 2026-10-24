@@ -1,3 +1,4 @@
+import { prepareLegacySequences } from "./legacy-sequencing";
 import { normalizeControls } from "./controls-schema";
 import { POSITION_EPSILON } from "./constants";
 import { AssetClass, CashMovement, Client, CorporateAction, DpmState, Transaction } from "./types";
@@ -114,7 +115,7 @@ export function validateLedger(client: Client, transactions: Transaction[], cash
 
 export function validateState(input: unknown): DpmState {
   if(new TextEncoder().encode(JSON.stringify(input)).length>5*1024*1024)fail("Book exceeds the 5 MB portable-backup limit");
-  const root = object(input);
+  const root = object(prepareLegacySequences(input));
   if(root.version===STATE_VERSION && root.controls===undefined)fail("Schema v4 requires its control collections");
   const revision = root.revision === undefined ? 0 : number(root.revision, "book revision");
   if (!Number.isSafeInteger(revision)) fail("Invalid book revision");
@@ -200,7 +201,12 @@ export function validateState(input: unknown): DpmState {
     if (Math.abs(total - 100) > 1e-6) fail(`${client.code}: targets must total 100%`);
 
   }
-  const normalized=normalizeControls({ version: STATE_VERSION, revision, clients, transactions, cashMovements, corporateActions, targets },root.controls,currency);
+  const sequenceMigration=root.sequenceMigration===undefined?undefined:(()=>{
+    const m=object(root.sequenceMigration);if(![1,2,3].includes(m.sourceVersion as number)||m.rule!=="date/old-sequence/event-priority/stable-id"||!Array.isArray(m.mapping))fail("Invalid sequence migration record");
+    const keys=new Set<string>(),sequences=new Set<number>();const mapping=(m.mapping as unknown[]).map(item=>{const r=object(item);if(!["trade","cash","action"].includes(String(r.type)))fail("Invalid sequence migration type");const id=str(r.id,"migration event ID"),oldSequence=number(r.oldSequence,"old sequence",1),newSequence=number(r.newSequence,"new sequence",1);if(!Number.isSafeInteger(oldSequence)||!Number.isSafeInteger(newSequence)||keys.has(`${r.type}:${id}`)||sequences.has(newSequence))fail("Invalid sequence migration mapping");keys.add(`${r.type}:${id}`);sequences.add(newSequence);return {type:r.type as "trade"|"cash"|"action",id,oldSequence,newSequence};});
+    return {sourceVersion:m.sourceVersion as 1|2|3,rule:"date/old-sequence/event-priority/stable-id" as const,mapping};
+  })();
+  const normalized=normalizeControls({ ...(sequenceMigration?{sequenceMigration}:{}), version: STATE_VERSION, revision, clients, transactions, cashMovements, corporateActions, targets },root.controls,currency);
   for(const a of normalized.controls!.accounts) validateLedger({...clients.find(c=>c.id===a.clientId)!,initialCash:a.initialCash},normalized.transactions.filter(t=>t.accountId===a.id),normalized.cashMovements.filter(t=>t.accountId===a.id),normalized.corporateActions.filter(t=>t.accountId===a.id),normalized);
   return normalized;
 }

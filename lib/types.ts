@@ -111,7 +111,13 @@ export interface SavedView { id: string; label: string; accountIds: string[]; }
 export interface BookControls { accounts: Account[]; securities: Security[]; observations: CustodianObservation[]; reviews: BreakReview[]; overrides: PriceOverride[]; households: Household[]; views: SavedView[]; }
 export interface BookChange { id: string; revisionBefore: number; revisionAfter: number; recordedAt: string; action: string; actor: "Local operator (unverified)"; before: DpmState | null; after: DpmState; }
 
+export interface LegacySequenceMigration {
+  sourceVersion: 1 | 2 | 3;
+  rule: "date/old-sequence/event-priority/stable-id";
+  mapping: {type:"trade"|"cash"|"action";id:string;oldSequence:number;newSequence:number}[];
+}
 export interface DpmState {
+  sequenceMigration?: LegacySequenceMigration;
   controls?: BookControls;
   revision?: number;
   version?: number;
