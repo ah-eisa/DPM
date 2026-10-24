@@ -1,5 +1,7 @@
 "use client";
 
+import { WorkspaceLinks } from "./workspace-links";
+
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { aggregateAum, buildPortfolio, driftForClient } from "@/lib/portfolio";
 import { exportState, importState, loadState, saveState, seedState, resetState, recoverState, downloadSavedBook } from "@/lib/storage";
@@ -43,8 +45,8 @@ export default function Home() {
     setLoaded(true);
   }, []);
 
-  function commit(next: DpmState): boolean {
-    try { const valid = validateState(next); saveState(valid); setState(valid); setError(""); return true; }
+  async function commit(next: DpmState): Promise<boolean> {
+    try { const valid = await saveState(validateState(next)); setState(valid); setError(""); return true; }
     catch (e) { setError((e as Error).message); return false; }
   }
 
@@ -101,7 +103,7 @@ export default function Home() {
     setTrade((t) => ({ ...t, clientId: id, currency: state.clients.find(c => c.id === id)?.baseCurrency ?? "USD" }));
   }
 
-  function addTrade(e: FormEvent) {
+  async function addTrade(e: FormEvent) {
     e.preventDefault();
     const quantity = Number(trade.quantity);
     const price = Number(trade.price);
@@ -122,7 +124,7 @@ export default function Home() {
       tradeDate: trade.tradeDate,
       gtnRef: trade.gtnRef.trim() || undefined,
     };
-    if (!commit({ ...state, transactions: [...state.transactions, tx] })) return;
+    if (!await commit({ ...state, transactions: [...state.transactions, tx] })) return;
     setTrade((t) => ({ ...t, symbol: "", name: "", quantity: "", price: "", fees: "0", gtnRef: "", sequence: "" }));
   }
 
@@ -131,8 +133,8 @@ export default function Home() {
     commit({ ...state, transactions: state.transactions.filter(t => t.id !== id) });
   }
 
-  function adoptBook(next: DpmState) {
-    if (!commit(next)) return false;
+  async function adoptBook(next: DpmState) {
+    try { const saved = await saveState(next,{expectedRevision:state.revision ?? 0,recovery:!ready}); setState(saved); setError(""); } catch(e) {setError((e as Error).message);return false;}
     setActiveClientId(next.clients[0].id);
     setTrade(t => ({...t,clientId:next.clients[0].id,currency:next.clients[0].baseCurrency,fxRate:"1"}));
     setReady(true); return true;
@@ -144,7 +146,7 @@ export default function Home() {
     try {
       const imported = await importState(file);
       if (!window.confirm("Replace current book? Download a Backup first. The previous saved book is retained for recovery.")) return;
-      adoptBook(imported);
+      await adoptBook(imported);
     } catch (err) { setError(err instanceof Error ? err.message : "Import failed"); }
     e.target.value = "";
   }
@@ -158,7 +160,7 @@ export default function Home() {
       <header className="topbar">
         <div className="brand"><div className="brandmark">D</div><div><h1>DPM Desk</h1><div className="muted small">Private portfolio operating workbench</div></div></div>
         <div className="row">
-          <a className="btn" href="/operations">Operations</a>
+          <WorkspaceLinks current="/" />
           <button className="btn" aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} onClick={toggleTheme}>{theme === "dark" ? "Light mode" : "Dark mode"}</button>
           <span className="status"><span className={`dot ${quoteStatus === "partial" ? "off" : ""}`} />{quoteStatus === "loading" ? "Refreshing prices" : quoteStatus === "ok" ? "Latest quotes received" : quoteStatus === "partial" ? "Partial market data" : "Local data ready"}</span>
           <button className="btn ghost" onClick={refreshQuotes}>Refresh</button>
@@ -174,14 +176,14 @@ export default function Home() {
             <button className="btn" onClick={() => setSettings("edit")}>Edit mandate</button>
             <button className="btn" onClick={() => { try {exportState(state);} catch(e) {setError((e as Error).message);} }}>Backup</button>
             <button className="btn" onClick={() => {try { const previous = recoverState(); if (window.confirm("Recover previous saved book?")) adoptBook(previous); } catch(e) {setError((e as Error).message);} }}>Recover previous</button>
-            <button className="btn danger" onClick={() => {if(window.confirm("Reset to demo? Back up first. Your previous saved book is retained for recovery.")) {try {resetState(); const next=loadState(); setState(next); setActiveClientId(next.clients[0].id); setTrade(t=>({...t,clientId:next.clients[0].id,currency:next.clients[0].baseCurrency,fxRate:"1"}));} catch(e) {setError((e as Error).message);}}}}>Reset demo</button>
+            <button className="btn danger" onClick={async () => {if(window.confirm("Reset to demo? Back up first. Your previous saved book is retained for recovery.")) {try {const next=await resetState(state.revision ?? 0); setState(next); setActiveClientId(next.clients[0].id); setTrade(t=>({...t,clientId:next.clients[0].id,currency:next.clients[0].baseCurrency,fxRate:"1"}));} catch(e) {setError((e as Error).message);}}}}>Reset demo</button>
             <label className="btn">Restore<input type="file" accept="application/json" onChange={onImport} style={{display:"none"}} /></label>
           </div>
         </div>
 
         {error && <div className="notice negative" role="alert">{error}</div>}
         <div className="row client-selector"><label htmlFor="active-client">Active client</label><select id="active-client" value={active.client.id} onChange={e => selectClient(e.target.value)}>{state.clients.map(c => <option key={c.id} value={c.id}>{c.code}  /  {c.baseCurrency}</option>)}</select><span className="muted small">Book totals below include {active.client.baseCurrency} portfolios only.</span></div>
-        {settings && <MandateForm key={settings + active.client.id} state={state} client={settings === "edit" ? active.client : undefined} onClose={() => setSettings(null)} onSave={(next,id) => {if(!commit(next))return false; setActiveClientId(id); setTrade(t=>({...t,clientId:id,currency:next.clients.find(c=>c.id===id)!.baseCurrency}));setSettings(null);return true;}}/>}
+        {settings && <MandateForm key={settings + active.client.id} state={state} client={settings === "edit" ? active.client : undefined} onClose={() => setSettings(null)} onSave={async (next,id) => {if(!await commit(next))return false; setActiveClientId(id); setTrade(t=>({...t,clientId:id,currency:next.clients.find(c=>c.id===id)!.baseCurrency}));setSettings(null);return true;}}/>}
         {!sameCurrency.every(p => p.valuationComplete) && <div className="notice" role="status">Indicative valuation: some holdings use cost or stale prices. P&amp;L, allocations and rebalance values may be incomplete. Review each holding below.</div>}
         <section className="grid kpis">
           <Kpi label={`${sameCurrency.every(p => p.valuationComplete) ? "AUM" : "Indicative AUM"} (${active.client.baseCurrency})`} value={money.format(aum)} />

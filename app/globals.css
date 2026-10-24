@@ -5,3 +5,5 @@ input,select{font:inherit;color:inherit;background:var(--input);border:1px solid
  .grid>*{min-width:0}.card{overflow-x:auto}.settings .form-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}@media(max-width:700px){.settings .form-grid,.form-grid{grid-template-columns:1fr}}
 
 [data-theme="light"] .app{background:var(--canvas)}[data-theme="light"] .tab.active,[data-theme="light"] .btn.primary{color:#ffffff}[data-theme="light"] .brandmark{background:#195a99;color:#ffffff}[data-theme="light"] .bar span{background:#3577b4}[data-theme="light"] .dot{background:#16704f}
+
+.workspace-links a{text-decoration:none}.topbar{flex-wrap:wrap;gap:12px}.workspace-links{justify-content:flex-start}

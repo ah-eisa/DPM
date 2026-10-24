@@ -87,6 +87,7 @@ export interface Quote {
 }
 
 export interface DpmState {
+  revision?: number;
   version?: number;
   clients: Client[];
   transactions: Transaction[];

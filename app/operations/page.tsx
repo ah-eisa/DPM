@@ -1,5 +1,7 @@
 "use client";
 
+import { WorkspaceLinks } from "../workspace-links";
+
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { importGtnCsv, allocateMasterExecution, maxLedgerSequence } from "@/lib/operations";
 import { downloadSavedBook, importState, loadState, recoverState, saveState, seedState } from "@/lib/storage";
@@ -53,11 +55,10 @@ export default function OperationsPage() {
     setLoadBlocked(false); setError("");
   }
 
-  function commit(next: DpmState, ok: string) {
+  async function commit(next: DpmState, ok: string) {
     if (loadBlocked) { setError("Writes are blocked until the saved book is successfully restored or imported."); return false; }
     try {
-      const valid = validateState(next);
-      saveState(valid);
+      const valid = await saveState(validateState(next));
       setState(valid);
       setError(""); setMessage(ok);
       return true;
@@ -68,18 +69,18 @@ export default function OperationsPage() {
     const file = e.target.files?.[0]; if (!file) return;
     try {
       const imported = await importState(file);
-      saveState(imported);
-      adoptLoadedBook(imported);
+      const saved = await saveState(imported,{expectedRevision:state.revision ?? 0,recovery:loadBlocked});
+      adoptLoadedBook(saved);
       setMessage("Validated backup restored");
     } catch (err) { setError(err instanceof Error ? err.message : "Restore failed"); }
     e.target.value = "";
   }
 
-  function recoverPrevious() {
+  async function recoverPrevious() {
     try {
       const previous = recoverState();
-      saveState(previous);
-      adoptLoadedBook(previous);
+      const saved = await saveState(previous,{expectedRevision:state.revision ?? 0,recovery:loadBlocked});
+      adoptLoadedBook(saved);
       setMessage("Previous validated save recovered");
     } catch (e) { setError((e as Error).message); }
   }
@@ -87,23 +88,23 @@ export default function OperationsPage() {
   const clientById = useMemo(() => new Map(state.clients.map(c => [c.id,c])), [state.clients]);
   const activeCashClient = clientById.get(cash.clientId);
 
-  function addCash(e: FormEvent) {
+  async function addCash(e: FormEvent) {
     e.preventDefault(); if (!activeCashClient) return;
     const item: CashMovement = { id:uid("cash"),clientId:cash.clientId,sequence:maxLedgerSequence(state)+1,kind:cash.kind,amount:Number(cash.amount),currency:cash.currency.toUpperCase(),fxRate:Number(cash.fxRate),movementDate:cash.movementDate,symbol:cash.symbol.trim().toUpperCase()||undefined,reference:cash.reference.trim()||undefined,notes:cash.notes.trim()||undefined };
-    if (commit({...state,cashMovements:[...state.cashMovements,item]}, `${cash.kind} recorded`)) setCash(c=>({...c,amount:"",symbol:"",reference:"",notes:""}));
+    if (await commit({...state,cashMovements:[...state.cashMovements,item]}, `${cash.kind} recorded`)) setCash(c=>({...c,amount:"",symbol:"",reference:"",notes:""}));
   }
 
-  function addAction(e: FormEvent) {
+  async function addAction(e: FormEvent) {
     e.preventDefault();
     const item: CorporateAction = { id:uid("ca"),clientId:action.clientId,sequence:maxLedgerSequence(state)+1,kind:action.kind,symbol:action.symbol.trim().toUpperCase(),actionDate:action.actionDate,factor:Number(action.factor),reference:action.reference.trim()||undefined,notes:action.notes.trim()||undefined };
-    if (commit({...state,corporateActions:[...state.corporateActions,item]}, `${action.kind} recorded`)) setAction(a=>({...a,symbol:"",reference:"",notes:""}));
+    if (await commit({...state,corporateActions:[...state.corporateActions,item]}, `${action.kind} recorded`)) setAction(a=>({...a,symbol:"",reference:"",notes:""}));
   }
 
-  function addBulk(e: FormEvent) {
+  async function addBulk(e: FormEvent) {
     e.preventDefault();
     try {
       const txs = allocateMasterExecution(state,{symbol:master.symbol,name:master.name||undefined,assetClass:master.assetClass,side:master.side,totalQuantity:Number(master.totalQuantity),price:Number(master.price),fees:Number(master.fees),currency:master.currency,fxRate:Number(master.fxRate),tradeDate:master.tradeDate,gtnRef:master.gtnRef||undefined,notes:master.notes||undefined},Object.entries(allocations).filter(([,q])=>Number(q)>0).map(([clientId,q])=>({clientId,quantity:Number(q)})));
-      if (commit({...state,transactions:[...state.transactions,...txs]}, `Master execution allocated to ${txs.length} clients`)) { setMaster(m=>({...m,symbol:"",name:"",totalQuantity:"",price:"",fees:"0",gtnRef:"",notes:""})); setAllocations({}); }
+      if (await commit({...state,transactions:[...state.transactions,...txs]}, `Master execution allocated to ${txs.length} clients`)) { setMaster(m=>({...m,symbol:"",name:"",totalQuantity:"",price:"",fees:"0",gtnRef:"",notes:""})); setAllocations({}); }
     } catch (e) { setError((e as Error).message); setMessage(""); }
   }
 
@@ -112,7 +113,7 @@ export default function OperationsPage() {
     try {
       const txs=importGtnCsv(await file.text(),state);
       if (!window.confirm(`Import ${txs.length} validated GTN executions?`)) return;
-      commit({...state,transactions:[...state.transactions,...txs]}, `${txs.length} GTN executions imported`);
+      await commit({...state,transactions:[...state.transactions,...txs]}, `${txs.length} GTN executions imported`);
     } catch(err){setError(err instanceof Error?err.message:"GTN import failed");setMessage("");}
     e.target.value="";
   }
@@ -123,12 +124,12 @@ export default function OperationsPage() {
   if(!ready) return <main className="app"><div className="container">Loading operations...</div></main>;
 
   if(loadBlocked) return <main className="app">
-    <header className="topbar operations-topbar"><div className="brand"><div className="brandmark">O</div><div><h1>DPM Operations</h1><div className="muted small">Recovery mode</div></div></div><div className="row"><button className="btn" onClick={toggleTheme}>{theme==="dark"?"Light mode":"Dark mode"}</button><a className="btn" href="/">Dashboard</a></div></header>
+    <header className="topbar operations-topbar"><div className="brand"><div className="brandmark">O</div><div><h1>DPM Operations</h1><div className="muted small">Recovery mode</div></div></div><div className="row"><button className="btn" onClick={toggleTheme}>{theme==="dark"?"Light mode":"Dark mode"}</button><WorkspaceLinks current="/operations" /></div></header>
     <div className="container"><section className="card"><h2>Saved book could not be loaded</h2><div className="notice negative" role="alert">{error}</div><p className="muted">All operational writes are blocked. The demo state is not writable and will not replace the saved book.</p><div className="row"><button className="btn" onClick={()=>{try{downloadSavedBook();}catch(e){setError((e as Error).message);}}}>Download original saved book</button><button className="btn" onClick={recoverPrevious}>Recover previous save</button><label className="btn primary">Restore validated backup<input hidden type="file" accept="application/json" onChange={restoreBackup}/></label></div></section></div>
   </main>;
 
   return <main className="app">
-    <header className="topbar operations-topbar"><div className="brand"><div className="brandmark">O</div><div><h1>DPM Operations</h1><div className="muted small">Cash, corporate actions, bulk allocation and GTN import</div></div></div><div className="row"><button className="btn" onClick={toggleTheme}>{theme==="dark"?"Light mode":"Dark mode"}</button><a className="btn" href="/">Dashboard</a></div></header>
+    <header className="topbar operations-topbar"><div className="brand"><div className="brandmark">O</div><div><h1>DPM Operations</h1><div className="muted small">Cash, corporate actions, bulk allocation and GTN import</div></div></div><div className="row"><button className="btn" onClick={toggleTheme}>{theme==="dark"?"Light mode":"Dark mode"}</button><WorkspaceLinks current="/operations" /></div></header>
     <div className="container">
       <div className="notice">All entries are validated against cash, holdings, currencies and one global ledger sequence before they are saved.</div>
       {error&&<div className="notice negative" role="alert">{error}</div>}{message&&<div className="notice positive" role="status">{message}</div>}

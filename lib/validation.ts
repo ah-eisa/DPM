@@ -113,6 +113,8 @@ export function validateLedger(client: Client, transactions: Transaction[], cash
 
 export function validateState(input: unknown): DpmState {
   const root = object(input);
+  const revision = root.revision === undefined ? 0 : number(root.revision, "book revision");
+  if (!Number.isSafeInteger(revision)) fail("Invalid book revision");
   if (root.version !== undefined && root.version !== 1 && root.version !== 2 && root.version !== STATE_VERSION) fail("Unsupported backup version");
   if (!Array.isArray(root.clients) || !root.clients.length || !Array.isArray(root.transactions) || !Array.isArray(root.targets)) fail("Invalid DPM backup file");
   const ids = new Set<string>(), codes = new Set<string>();
@@ -195,5 +197,5 @@ export function validateState(input: unknown): DpmState {
     if (Math.abs(total - 100) > 1e-6) fail(`${client.code}: targets must total 100%`);
     validateLedger(client, transactions, cashMovements, corporateActions);
   }
-  return { version: STATE_VERSION, clients, transactions, cashMovements, corporateActions, targets };
+  return { version: STATE_VERSION, revision, clients, transactions, cashMovements, corporateActions, targets };
 }
