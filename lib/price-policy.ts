@@ -1,4 +1,19 @@
-import type { DpmState, Quote } from "./types";
+import type { DpmState, PriceOverride, Quote } from "./types";
+
+function timestampMs(value: string) {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function overrideTimes(override: PriceOverride) {
+  const effectiveAt = timestampMs(override.effectiveAt);
+  const expiresAt = timestampMs(override.expiresAt);
+  const recordedAt = timestampMs(override.recordedAt);
+  return effectiveAt == null || expiresAt == null || recordedAt == null
+    ? undefined
+    : { effectiveAt, expiresAt, recordedAt };
+}
+
 export function selectPrices(
   state: DpmState,
   quotes: Record<string, Quote>,
@@ -7,6 +22,9 @@ export function selectPrices(
   quotes: Record<string, Quote>;
   lineage: { securityId: string; selected: string; rejected: string[] }[];
 } {
+  const asOfMs = timestampMs(asOf);
+  if (asOfMs == null) throw new Error("Price selection asOf must be a valid timestamp");
+
   const selected = { ...quotes };
   const lineage = [];
   for (const s of state.controls?.securities ?? []) {
@@ -14,14 +32,23 @@ export function selectPrices(
       (o) => o.securityId === s.id,
     );
     const valid = alternatives
-      .filter((o) => o.effectiveAt <= asOf && o.expiresAt > asOf)
+      .map((override) => ({ override, times: overrideTimes(override) }))
+      .filter(
+        (entry): entry is {
+          override: PriceOverride;
+          times: { effectiveAt: number; expiresAt: number; recordedAt: number };
+        } =>
+          !!entry.times &&
+          entry.times.effectiveAt <= asOfMs &&
+          entry.times.expiresAt > asOfMs,
+      )
       .sort(
         (a, b) =>
-          b.effectiveAt.localeCompare(a.effectiveAt) ||
-          b.recordedAt.localeCompare(a.recordedAt) ||
-          b.id.localeCompare(a.id),
+          b.times.effectiveAt - a.times.effectiveAt ||
+          b.times.recordedAt - a.times.recordedAt ||
+          b.override.id.localeCompare(a.override.id),
       );
-    const chosen = valid[0];
+    const chosen = valid[0]?.override;
     const q =
       quotes[s.id] ??
       (state.controls!.securities.filter((x) => x.symbol === s.symbol)
@@ -49,10 +76,17 @@ export function selectPrices(
       rejected: [
         ...alternatives
           .filter((o) => o.id !== chosen?.id)
-          .map(
-            (o) =>
-              `${o.id}: ${o.effectiveAt > asOf ? "not effective" : o.expiresAt <= asOf ? "expired" : "lower precedence"}`,
-          ),
+          .map((o) => {
+            const times = overrideTimes(o);
+            const reason = !times
+              ? "invalid timestamp"
+              : times.effectiveAt > asOfMs
+                ? "not effective"
+                : times.expiresAt <= asOfMs
+                  ? "expired"
+                  : "lower precedence";
+            return `${o.id}: ${reason}`;
+          }),
         ...(chosen && q ? [`${q.source}: active override policy`] : []),
       ],
     });

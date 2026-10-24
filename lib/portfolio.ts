@@ -88,13 +88,20 @@ function buildPortfolioCore(
     const quote = quotes[symbol];
     const quoteCurrency = quote?.currency?.toUpperCase();
     const fx = quoteCurrency === client.baseCurrency ? undefined : quotes[`${quoteCurrency}${client.baseCurrency}=X`];
+    const quoteTime = quote ? Date.parse(quote.asOf) : NaN;
+    const fxTime = fx ? Date.parse(fx.asOf) : undefined;
+    const quoteAtOrBeforeAsOf = Number.isFinite(quoteTime) && quoteTime <= asOfMs;
+    const fxAtOrBeforeAsOf = quoteCurrency === client.baseCurrency || (!!fx && fxTime !== undefined && Number.isFinite(fxTime) && fxTime <= asOfMs);
     const currencyMatches = !meta.currency || meta.currency === quoteCurrency;
-    const hasPrice = currencyMatches && !!quoteCurrency && Number.isFinite(quote?.price) && quote.price >= 0 && (quoteCurrency === client.baseCurrency || (!!fx && Number.isFinite(fx.price) && fx.price > 0)) && Number.isFinite(quantity * quote.price * (fx?.price ?? 1));
-    const stale = quote?.stale || fx?.stale || [quote, fx].some((q) => {
+    const hasPrice = currencyMatches && quoteAtOrBeforeAsOf && fxAtOrBeforeAsOf && !!quoteCurrency && Number.isFinite(quote?.price) && quote.price >= 0 && (quoteCurrency === client.baseCurrency || (!!fx && Number.isFinite(fx.price) && fx.price > 0)) && Number.isFinite(quantity * quote.price * (fx?.price ?? 1));
+    const stale = Boolean(hasPrice && (quote?.stale || fx?.stale || [quote, fx].some((q) => {
       if (!q) return false;
-      const quoteTime = Date.parse(q.asOf);
-      return !Number.isFinite(quoteTime) || quoteTime > asOfMs || asOfMs - quoteTime > 24 * 60 * 60 * 1000;
-    });
+      const quoteTimestamp = Date.parse(q.asOf);
+      return asOfMs - quoteTimestamp > 24 * 60 * 60 * 1000;
+    })));
+    const invalidOrFutureTimestamp =
+      !!quote && (!Number.isFinite(quoteTime) || quoteTime > asOfMs) ||
+      !!fx && (fxTime === undefined || !Number.isFinite(fxTime) || fxTime > asOfMs);
     rawHoldings.push({
       symbol,
       priceSource: hasPrice ? quote.source : undefined,
@@ -108,7 +115,13 @@ function buildPortfolioCore(
       realisedPnl: realisedBySymbol.get(symbol) ?? 0,
       marketPrice: hasPrice ? quote.price * (fx?.price ?? 1) : averageCost,
       valuationStatus: !hasPrice ? "cost" : stale ? "stale" : "live",
-      valuationNote: !hasPrice ? "Indicative cost only: missing price, currency mismatch or FX rate" : stale ? "Latest available market quote is stale; review timestamp" : undefined,
+      valuationNote: !hasPrice
+        ? invalidOrFutureTimestamp
+          ? "Indicative cost only: market price or FX timestamp is invalid or after valuation asOf"
+          : "Indicative cost only: missing price, currency mismatch or FX rate"
+        : stale
+          ? "Latest available market quote is stale; review timestamp"
+          : undefined,
     });
   }
 

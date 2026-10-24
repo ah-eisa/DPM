@@ -241,9 +241,9 @@ describe("client portal publish layer", () => {
     }
   });
 
-  it("does not classify a quote after publishedAt as live", () => {
+  it("excludes a quote after publishedAt from NAV instead of merely marking it stale", () => {
     const futureQuote = {
-      ...quote("X", 120),
+      ...quote("X", 900),
       asOf: "2026-10-25T10:00:00.000Z",
     };
     const s = buildClientPortalSnapshot({
@@ -254,8 +254,43 @@ describe("client portal publish layer", () => {
       snapshotId: "snap-future-quote",
       publishedAt,
     });
-    expect(s.holdings[0].valuationStatus).toBe("stale");
+    expect(s.nav).toBe(1000);
+    expect(s.holdings[0]).toMatchObject({
+      marketPrice: 100,
+      marketValue: 200,
+      valuationStatus: "cost",
+    });
     expect(s.valuationComplete).toBe(false);
+  });
+
+  it("treats equivalent timezone representations as the same override instant", () => {
+    const state = book();
+    state.controls!.overrides.push({
+      id: "ov-same-instant",
+      securityId: "sx",
+      price: 999,
+      currency: "USD",
+      effectiveAt: "2026-10-24T10:00:00+02:00",
+      expiresAt: "2026-10-24T14:00:00+02:00",
+      recordedAt: "2026-10-24T07:59:00.000Z",
+      source: "Ops test",
+      reason: "Timezone normalization regression",
+    });
+    const buildAt = (at: string, id: string) =>
+      buildClientPortalSnapshot({
+        state,
+        clientId: "c1",
+        accountId: "a1",
+        quotes: { sx: quote("X", 120) },
+        snapshotId: id,
+        publishedAt: at,
+      });
+    const utc = buildAt("2026-10-24T08:00:00.000Z", "snap-utc");
+    const dubai = buildAt("2026-10-24T12:00:00+04:00", "snap-dubai");
+    expect(utc.nav).toBe(2798);
+    expect(dubai.nav).toBe(2798);
+    expect(utc.holdings[0].marketPrice).toBe(999);
+    expect(dubai.holdings[0].marketPrice).toBe(999);
   });
 
   it("refuses publishing if client ledger events are not bound to an account", () => {
