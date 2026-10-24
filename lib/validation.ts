@@ -1,7 +1,8 @@
+import { normalizeControls } from "./controls-schema";
 import { POSITION_EPSILON } from "./constants";
 import { AssetClass, CashMovement, Client, CorporateAction, DpmState, Transaction } from "./types";
 
-export const STATE_VERSION = 3;
+export const STATE_VERSION = 4;
 export const ASSET_CLASSES: AssetClass[] = ["US Equity", "UAE Equity", "ETF", "Bond/Sukuk", "Crypto", "Metal", "Cash", "Other"];
 const CASH_KINDS = ["DEPOSIT", "WITHDRAWAL", "DIVIDEND", "COUPON", "INTEREST", "FEE", "TAX", "OTHER"] as const;
 const ACTION_KINDS = ["SPLIT", "REVERSE_SPLIT", "STOCK_DIVIDEND"] as const;
@@ -64,7 +65,7 @@ function cashDelta(m: CashMovement) {
   return ["WITHDRAWAL", "FEE", "TAX"].includes(m.kind) ? -value : value;
 }
 
-export function validateLedger(client: Client, transactions: Transaction[], cashMovements: CashMovement[] = [], corporateActions: CorporateAction[] = []) {
+export function validateLedger(client: Client, transactions: Transaction[], cashMovements: CashMovement[] = [], corporateActions: CorporateAction[] = [], state?: DpmState) {
   if (!Number.isFinite(client.initialCash) || client.initialCash < 0) fail("Invalid initial cash");
   let cash = client.initialCash;
   const positions = new Map<string, { quantity: number; assetClass: string; currency: string }>();
@@ -78,21 +79,21 @@ export function validateLedger(client: Client, transactions: Transaction[], cash
     }
     if (event.type === "action") {
       const action = event.item;
-      const p = positions.get(action.symbol);
+      const p = positions.get(action.securityId ?? action.symbol);
       if (!p) throw new Error(`${action.symbol}: corporate action has no open holding on ${action.actionDate}`);
       if (p.quantity < POSITION_EPSILON) fail(`${action.symbol}: corporate action has no open holding on ${action.actionDate}`);
       p.quantity *= action.factor;
       if (!Number.isFinite(p.quantity) || p.quantity <= 0) fail("Corporate action creates invalid position");
-      positions.set(action.symbol, p);
+      positions.set(action.securityId ?? action.symbol, p);
       continue;
     }
     const tx = event.item;
     if (![tx.quantity, tx.price, tx.fees, tx.fxRate].every(Number.isFinite) || tx.quantity < POSITION_EPSILON || tx.price < 0 || tx.fees < 0 || tx.fxRate <= 0 || !["BUY", "SELL"].includes(tx.side)) fail("Invalid trade numbers or side");
     const quoteCurrency = tx.currency ?? (tx.fxRate === 1 ? client.baseCurrency : "UNKNOWN");
     if (quoteCurrency === client.baseCurrency && tx.fxRate !== 1) fail("Same-currency execution requires FX rate 1");
-    const p = positions.get(tx.symbol) ?? { quantity: 0, assetClass: tx.assetClass, currency: quoteCurrency };
+    const p = positions.get(tx.securityId ?? tx.symbol) ?? { quantity: 0, assetClass: tx.assetClass, currency: quoteCurrency };
     if (p.assetClass !== tx.assetClass || p.currency !== quoteCurrency) fail(`${tx.symbol}: inconsistent asset class or currency`);
-    const gross = tx.quantity * tx.price * tx.fxRate;
+    const gross = tx.quantity * tx.price * (state?.controls?.securities.find(s=>s.id===tx.securityId)?.priceMultiplier ?? 1) * tx.fxRate;
     if (!Number.isFinite(gross)) fail("Trade value exceeds supported range");
     if (tx.side === "BUY") {
       if (!Number.isFinite((gross + tx.fees) / tx.quantity)) fail("Unit cost exceeds supported range");
@@ -107,13 +108,17 @@ export function validateLedger(client: Client, transactions: Transaction[], cash
     }
     if (!Number.isFinite(cash)) fail("Cash exceeds supported range");
     if (!Number.isFinite(p.quantity)) fail("Position exceeds supported range");
-    positions.set(tx.symbol, p);
+    positions.set(tx.securityId ?? tx.symbol, p);
   }
 }
 
 export function validateState(input: unknown): DpmState {
+  if(new TextEncoder().encode(JSON.stringify(input)).length>5*1024*1024)fail("Book exceeds the 5 MB portable-backup limit");
   const root = object(input);
-  if (root.version !== undefined && root.version !== 1 && root.version !== 2 && root.version !== STATE_VERSION) fail("Unsupported backup version");
+  if(root.version===STATE_VERSION && root.controls===undefined)fail("Schema v4 requires its control collections");
+  const revision = root.revision === undefined ? 0 : number(root.revision, "book revision");
+  if (!Number.isSafeInteger(revision)) fail("Invalid book revision");
+  if (root.version !== undefined && root.version !== 1 && root.version !== 2 && root.version !== 3 && root.version !== STATE_VERSION) fail("Unsupported backup version");
   if (!Array.isArray(root.clients) || !root.clients.length || !Array.isArray(root.transactions) || !Array.isArray(root.targets)) fail("Invalid DPM backup file");
   const ids = new Set<string>(), codes = new Set<string>();
   const clients = (root.clients as unknown[]).map(item => {
@@ -129,12 +134,12 @@ export function validateState(input: unknown): DpmState {
     const r = object(item), id = str(r.id, "transaction ID"), clientId = str(r.clientId, "client ID");
     if (txIds.has(id) || !ids.has(clientId)) fail("Duplicate transaction or unknown client");
     txIds.add(id);
-    const sequence = r.sequence === undefined && root.version !== STATE_VERSION ? index + 1 : number(r.sequence, "execution sequence", 1);
+    const sequence = r.sequence === undefined && (root.version===undefined || root.version===1 || root.version===2) ? index + 1 : number(r.sequence, "execution sequence", 1);
     if (!Number.isSafeInteger(sequence) || txSequences.has(sequence)) fail("Execution sequence must be unique");
     txSequences.add(sequence);
     if (r.side !== "BUY" && r.side !== "SELL") fail("Invalid trade side");
     if (!ASSET_CLASSES.includes(r.assetClass as AssetClass) || r.assetClass === "Cash") fail("Invalid trade asset class");
-    return { id, clientId, sequence, symbol: symbol(r.symbol), side: r.side, quantity: number(r.quantity, "quantity", POSITION_EPSILON), price: number(r.price, "price"), fees: number(r.fees, "fees"), fxRate: number(r.fxRate, "FX rate", Number.MIN_VALUE), tradeDate: date(r.tradeDate, "trade date"), assetClass: r.assetClass, ...(r.currency ? { currency: currency(r.currency) } : {}), ...(r.name ? { name: str(r.name, "name") } : {}), ...(r.gtnRef ? { gtnRef: str(r.gtnRef, "GTN reference") } : {}), ...(r.notes ? { notes: str(r.notes, "notes") } : {}) } as Transaction;
+    return { ...(r.accountId ? {accountId:str(r.accountId,"account ID")} : {}), ...(r.securityId ? {securityId:str(r.securityId,"security ID")} : {}), id, clientId, sequence, symbol: symbol(r.symbol), side: r.side, quantity: number(r.quantity, "quantity", POSITION_EPSILON), price: number(r.price, "price"), fees: number(r.fees, "fees"), fxRate: number(r.fxRate, "FX rate", Number.MIN_VALUE), tradeDate: date(r.tradeDate, "trade date"), assetClass: r.assetClass, ...(r.currency ? { currency: currency(r.currency) } : {}), ...(r.name ? { name: str(r.name, "name") } : {}), ...(r.gtnRef ? { gtnRef: str(r.gtnRef, "GTN reference") } : {}), ...(r.notes ? { notes: str(r.notes, "notes") } : {}) } as Transaction;
   });
 
   const rawCash = root.cashMovements === undefined && root.version !== STATE_VERSION ? [] : root.cashMovements;
@@ -152,7 +157,7 @@ export function validateState(input: unknown): DpmState {
     const client = clients.find(c => c.id === clientId);
     if (!client) throw new Error("Unknown client for cash movement");
     if (ccy === client.baseCurrency && fxRate !== 1) fail("Same-currency cash movement requires FX rate 1");
-    return { id, clientId, sequence, kind: r.kind, amount: number(r.amount, "cash amount", Number.MIN_VALUE), currency: ccy, fxRate, movementDate: date(r.movementDate, "movement date"), ...(r.symbol ? { symbol: symbol(r.symbol) } : {}), ...(r.reference ? { reference: str(r.reference, "reference") } : {}), ...(r.notes ? { notes: str(r.notes, "notes") } : {}) } as CashMovement;
+    return { ...(r.accountId ? {accountId:str(r.accountId,"account ID")} : {}), ...(r.securityId ? {securityId:str(r.securityId,"security ID")} : {}), id, clientId, sequence, kind: r.kind, amount: number(r.amount, "cash amount", Number.MIN_VALUE), currency: ccy, fxRate, movementDate: date(r.movementDate, "movement date"), ...(r.symbol ? { symbol: symbol(r.symbol) } : {}), ...(r.reference ? { reference: str(r.reference, "reference") } : {}), ...(r.notes ? { notes: str(r.notes, "notes") } : {}) } as CashMovement;
   });
 
   const rawActions = root.corporateActions === undefined && root.version !== STATE_VERSION ? [] : root.corporateActions;
@@ -166,7 +171,7 @@ export function validateState(input: unknown): DpmState {
     if (!Number.isSafeInteger(sequence) || actionSequences.has(sequence)) fail("Corporate action sequence must be unique");
     actionSequences.add(sequence);
     if (!ACTION_KINDS.includes(r.kind as typeof ACTION_KINDS[number])) fail("Invalid corporate action kind");
-    return { id, clientId, sequence, kind: r.kind, symbol: symbol(r.symbol), actionDate: date(r.actionDate, "action date"), factor: number(r.factor, "corporate action factor", Number.MIN_VALUE), ...(r.reference ? { reference: str(r.reference, "reference") } : {}), ...(r.notes ? { notes: str(r.notes, "notes") } : {}) } as CorporateAction;
+    return { ...(r.accountId ? {accountId:str(r.accountId,"account ID")} : {}), ...(r.securityId ? {securityId:str(r.securityId,"security ID")} : {}), id, clientId, sequence, kind: r.kind, symbol: symbol(r.symbol), actionDate: date(r.actionDate, "action date"), factor: number(r.factor, "corporate action factor", Number.MIN_VALUE), ...(r.reference ? { reference: str(r.reference, "reference") } : {}), ...(r.notes ? { notes: str(r.notes, "notes") } : {}) } as CorporateAction;
   });
 
   const globalSequences = new Set<number>();
@@ -193,7 +198,9 @@ export function validateState(input: unknown): DpmState {
   for (const client of clients) {
     const total = targets.filter(t => t.clientId === client.id).reduce((sum, t) => sum + t.targetPct, 0);
     if (Math.abs(total - 100) > 1e-6) fail(`${client.code}: targets must total 100%`);
-    validateLedger(client, transactions, cashMovements, corporateActions);
+
   }
-  return { version: STATE_VERSION, clients, transactions, cashMovements, corporateActions, targets };
+  const normalized=normalizeControls({ version: STATE_VERSION, revision, clients, transactions, cashMovements, corporateActions, targets },root.controls,currency);
+  for(const a of normalized.controls!.accounts) validateLedger({...clients.find(c=>c.id===a.clientId)!,initialCash:a.initialCash},normalized.transactions.filter(t=>t.accountId===a.id),normalized.cashMovements.filter(t=>t.accountId===a.id),normalized.corporateActions.filter(t=>t.accountId===a.id),normalized);
+  return normalized;
 }

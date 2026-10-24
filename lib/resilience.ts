@@ -9,7 +9,7 @@ const KEY_SETTING = "device-backup-key";
 const FOLDER_SETTING = "backup-folder";
 
 export type BackupSnapshot = { id: string; createdAt: string; envelope: EncryptedBackupEnvelope };
-export type EncryptedBackupEnvelope = { type: "dpm-desk-encrypted-backup"; version: 1; algorithm: "AES-GCM"; iv: string; ciphertext: string; createdAt: string };
+export type EncryptedBackupEnvelope = { type: "dpm-desk-encrypted-backup"; version: 1; algorithm: "AES-GCM"; keyId?: string; iv: string; ciphertext: string; createdAt: string };
 
 type PickerWindow = Window & { showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle> };
 type PermissionHandle = FileSystemHandle & { queryPermission?: (options?: { mode?: "read" | "readwrite" }) => Promise<PermissionState>; requestPermission?: (options?: { mode?: "read" | "readwrite" }) => Promise<PermissionState> };
@@ -55,16 +55,25 @@ async function ensureRawKey():Promise<Uint8Array>{
   return keyCreationInFlight;
 }
 async function cryptoKey(raw:Uint8Array){return crypto.subtle.importKey("raw",asArrayBuffer(raw),{name:"AES-GCM"},false,["encrypt","decrypt"]);}
+async function keyId(raw:Uint8Array){return bytesToBase64(new Uint8Array(await crypto.subtle.digest("SHA-256",asArrayBuffer(raw)))).replace(/[^a-zA-Z0-9]/g,"");}
+type RetainedKey = { type:"retained-recovery-key"; id:string; key:string };
 
 export async function encryptState(state:DpmState,rawKey?:Uint8Array):Promise<EncryptedBackupEnvelope>{
   const valid=validateState(state),raw=rawKey??await ensureRawKey(),iv=crypto.getRandomValues(new Uint8Array(12));
   const encrypted=await crypto.subtle.encrypt({name:"AES-GCM",iv},await cryptoKey(raw),new TextEncoder().encode(JSON.stringify(valid)));
-  return {type:"dpm-desk-encrypted-backup",version:1,algorithm:"AES-GCM",iv:bytesToBase64(iv),ciphertext:bytesToBase64(new Uint8Array(encrypted)),createdAt:new Date().toISOString()};
+  return {type:"dpm-desk-encrypted-backup",version:1,algorithm:"AES-GCM",keyId:await keyId(raw),iv:bytesToBase64(iv),ciphertext:bytesToBase64(new Uint8Array(encrypted)),createdAt:new Date().toISOString()};
 }
 export async function decryptState(envelope:EncryptedBackupEnvelope,rawKey?:Uint8Array):Promise<DpmState>{
   if(envelope?.type!=="dpm-desk-encrypted-backup"||envelope.version!==1||envelope.algorithm!=="AES-GCM")throw new Error("Unsupported encrypted backup");
-  const raw=rawKey??await ensureRawKey();
-  try{const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:base64ToBytes(envelope.iv)},await cryptoKey(raw),base64ToBytes(envelope.ciphertext));return validateState(JSON.parse(new TextDecoder().decode(plain)));}catch{throw new Error("Encrypted backup could not be decrypted with this recovery key");}
+  const keys:Uint8Array[]=[];
+  if(rawKey) keys.push(rawKey);
+  else {
+    keys.push(await ensureRawKey());
+    if(envelope.keyId){const retained=await storeGet<RetainedKey>(SETTINGS_STORE,`recovery-key:${envelope.keyId}`);if(retained)keys.push(base64ToBytes(retained.key));}
+    else for(const value of await storeAll<unknown>(SETTINGS_STORE)){const entry=value as RetainedKey;if(entry?.type==="retained-recovery-key")keys.push(base64ToBytes(entry.key));}
+  }
+  for(const raw of keys){try{const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:base64ToBytes(envelope.iv)},await cryptoKey(raw),base64ToBytes(envelope.ciphertext));return validateState(JSON.parse(new TextDecoder().decode(plain)));}catch{/* Try the remaining retained keys. */}}
+  throw new Error("Encrypted backup could not be decrypted with this recovery key");
 }
 
 export function retentionVictims(snapshots:BackupSnapshot[]){return snapshots.slice().sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(BACKUP_RETENTION);}
@@ -76,7 +85,7 @@ export async function deleteSnapshot(id:string){await storeDelete(SNAPSHOT_STORE
 
 function downloadText(name:string,text:string,type="application/json"){const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement("a");a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);}
 export async function downloadRecoveryKey(){const raw=await ensureRawKey();downloadText("dpm-desk-recovery-key.json",JSON.stringify({type:"dpm-desk-recovery-key",version:1,key:bytesToBase64(raw)},null,2));}
-export async function importRecoveryKey(file:File){let parsed:{type?:string;version?:number;key?:string};try{parsed=JSON.parse(await file.text()) as typeof parsed;}catch{throw new Error("Recovery key file is not valid JSON");}if(parsed.type!=="dpm-desk-recovery-key"||parsed.version!==1||!parsed.key)throw new Error("Invalid recovery key file");const raw=base64ToBytes(parsed.key);if(raw.length!==32)throw new Error("Invalid recovery key length");await storePut(SETTINGS_STORE,parsed.key,KEY_SETTING);}
+export async function importRecoveryKey(file:File){if(file.size>65536)throw new Error("Recovery key file exceeds 64 KB");let parsed:{type?:string;version?:number;key?:string};try{parsed=JSON.parse(await file.text()) as typeof parsed;}catch{throw new Error("Recovery key file is not valid JSON");}if(parsed.type!=="dpm-desk-recovery-key"||parsed.version!==1||!parsed.key)throw new Error("Invalid recovery key file");const raw=base64ToBytes(parsed.key);if(raw.length!==32)throw new Error("Invalid recovery key length");const id=await keyId(raw);await storePut(SETTINGS_STORE,{type:"retained-recovery-key",id,key:parsed.key} satisfies RetainedKey,`recovery-key:${id}`);}
 export async function downloadEncryptedBackup(state:DpmState){const envelope=await encryptState(state);downloadText(`dpm-desk-${new Date().toISOString().replace(/[:.]/g,"-")}.dpmx`,JSON.stringify(envelope,null,2),"application/octet-stream");}
 export async function importEncryptedBackup(file:File){if(file.size>10*1024*1024)throw new Error("Encrypted backup exceeds 10 MB");let envelope:EncryptedBackupEnvelope;try{envelope=JSON.parse(await file.text()) as EncryptedBackupEnvelope;}catch{throw new Error("Encrypted backup file is not valid JSON");}return decryptState(envelope);}
 

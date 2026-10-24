@@ -27,7 +27,7 @@ export async function GET(request:NextRequest){
     if(end<start) throw new Error("End date must be after start date");
     const days=(end-start)/86400000;
     if(days>3660) throw new Error("Maximum history window is 10 years");
-    const interval:HistoryInterval=days>800?"1wk":"1d";
+    const interval:HistoryInterval="1d";
     const output:Record<string,MarketHistorySeries>={},errors:Record<string,string>={};
     for(let i=0;i<symbols.length;i+=5){
       await Promise.all(symbols.slice(i,i+5).map(async symbol=>{try{output[symbol]=await provider.history(symbol,start,end,interval);}catch(e){errors[symbol]=e instanceof Error?e.message:"History unavailable";}}));

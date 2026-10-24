@@ -1,3 +1,4 @@
+import { bookView } from "./book-view";
 import { POSITION_EPSILON } from "./constants";
 import { Client, CorporateAction, DpmState, Transaction } from "./types";
 import { orderedLedgerEvents } from "./validation";
@@ -73,7 +74,7 @@ function benchmarkLevel(parts: { symbol: string; weight: number }[], base: strin
     if (!s) return undefined;
     const close = latestAt(s.points, date, true);
     const fx = fxAt(s.currency, base, date, history);
-    if (!close || !fx) return undefined;
+    if (close == null || !fx) return undefined;
     const value = close * fx;
     const initial = bases.get(part.symbol) ?? value;
     bases.set(part.symbol, initial);
@@ -86,7 +87,7 @@ function isExternal(kind: string) {
   return !["DIVIDEND", "COUPON", "INTEREST", "FEE", "TAX"].includes(kind);
 }
 
-export function calculatePerformance(state: DpmState, client: Client, series: HistorySeries[], startDate: string, endDate: string): PerformanceResult {
+function calculatePerformanceCore(state: DpmState, client: Client, series: HistorySeries[], startDate: string, endDate: string): PerformanceResult {
   const history = seriesMap(series);
   const symbols = new Set(state.transactions.filter(t => t.clientId === client.id).map(t => key(t.symbol)));
   const benchmark = parseBenchmark(client.benchmark);
@@ -142,7 +143,7 @@ export function calculatePerformance(state: DpmState, client: Client, series: Hi
     const s = history.get(symbol);
     const close = s ? latestBefore(s.points, startDate, false) : undefined;
     const fx = s ? fxBefore(s.currency, client.baseCurrency, startDate, history) : undefined;
-    if (!close || !fx) throw new Error(`Opening valuation unavailable for ${symbol}; include a pre-period price anchor`);
+    if (close == null || !fx || s?.currency!==p.currency) throw new Error(`Opening valuation unavailable for ${symbol}; include a pre-period price anchor`);
     openingValue += p.quantity * close * fx;
   }
   if (!Number.isFinite(openingValue) || openingValue < 0) throw new Error("Opening portfolio value is invalid");
@@ -150,6 +151,7 @@ export function calculatePerformance(state: DpmState, client: Client, series: Hi
   let previousValue = openingValue;
   const startValue = openingValue;
   const benchBases = new Map<string, number>();
+  let benchmarkAvailable = false;
   if (benchmark.length) {
     const openingBases = new Map<string, number>();
     let complete = true;
@@ -160,7 +162,7 @@ export function calculatePerformance(state: DpmState, client: Client, series: Hi
       if (!close || !fx) { complete = false; break; }
       openingBases.set(part.symbol, close * fx);
     }
-    if (complete) for (const [symbol, value] of openingBases) benchBases.set(symbol, value);
+    if (complete) { for (const [symbol, value] of openingBases) benchBases.set(symbol, value); benchmarkAvailable = true; }
   }
 
   for (const date of orderedDates) {
@@ -173,17 +175,19 @@ export function calculatePerformance(state: DpmState, client: Client, series: Hi
       const s = history.get(symbol);
       const close = s ? latestAt(s.points, date, false) : undefined;
       const fx = s ? fxAt(s.currency, client.baseCurrency, date, history) : undefined;
-      if (!close || !fx) { complete = false; break; }
+      if (close == null || !fx || s?.currency!==p.currency) { complete = false; break; }
       value += p.quantity * close * fx;
     }
-    if (!complete || !Number.isFinite(value) || value <= 0) continue;
+    if (!complete) throw new Error(`Incomplete portfolio valuation on ${date}; historical performance cannot be safely calculated`);
+    if (!Number.isFinite(value) || value < 0) throw new Error(`Invalid portfolio value on ${date}`);
 
     const capitalAtRisk = previousValue + pendingFlow;
-    if (capitalAtRisk <= 0) throw new Error("External flows reduce beginning capital to zero or below");
-    portfolioIndex *= value / capitalAtRisk;
+    if (capitalAtRisk < 0) throw new Error("External flows reduce beginning capital below zero");
+    if (capitalAtRisk === 0 && value !== 0) throw new Error("Positive valuation without beginning capital");
+    if (capitalAtRisk > 0) portfolioIndex *= value / capitalAtRisk;
     previousValue = value;
 
-    const benchmarkIndex = benchmark.length ? benchmarkLevel(benchmark, client.baseCurrency, date, history, benchBases) : undefined;
+    const benchmarkIndex = benchmarkAvailable ? benchmarkLevel(benchmark, client.baseCurrency, date, history, benchBases) : undefined;
     points.push({ date, value, portfolioIndex, benchmarkIndex, externalFlow: pendingFlow });
     pendingFlow = 0;
   }
@@ -203,4 +207,8 @@ export function calculatePerformance(state: DpmState, client: Client, series: Hi
     benchmarkLabel: client.benchmark,
     flowConvention: "beginning-of-day"
   };
+}
+
+export function calculatePerformance(state:DpmState,client:Client,series:HistorySeries[],startDate:string,endDate:string):PerformanceResult {
+  const view=bookView(state,{},series);return calculatePerformanceCore(view.state,client,view.history,startDate,endDate);
 }

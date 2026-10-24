@@ -1,5 +1,7 @@
 "use client";
 
+import { WorkspaceLinks } from "./workspace-links";
+
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { aggregateAum, buildPortfolio, driftForClient } from "@/lib/portfolio";
 import { exportState, importState, loadState, saveState, seedState, resetState, recoverState, downloadSavedBook } from "@/lib/storage";
@@ -33,22 +35,22 @@ export default function Home() {
   const [quoteStatus, setQuoteStatus] = useState<"idle"|"loading"|"ok"|"partial">("idle");
   const [activeClientId, setActiveClientId] = useState("c001");
   const [tab, setTab] = useState<"overview"|"portfolio"|"trades"|"rebalance">("overview");
-  const [trade, setTrade] = useState({ clientId: "c001", symbol: "", name: "", assetClass: "US Equity" as AssetClass, side: "BUY" as Side, quantity: "", price: "", fees: "0", fxRate: "1", currency: "USD", sequence: "", tradeDate: new Date().toISOString().slice(0,10), gtnRef: "" });
+  const [trade, setTrade] = useState({ clientId: "c001", accountId:"", securityId:"", symbol: "", name: "", assetClass: "US Equity" as AssetClass, side: "BUY" as Side, quantity: "", price: "", fees: "0", fxRate: "1", currency: "USD", sequence: "", tradeDate: new Date().toISOString().slice(0,10), gtnRef: "" });
 
   useEffect(() => {
-    try {
-      const initial = loadState(); setState(initial); setActiveClientId(initial.clients[0].id);
+    void (async()=>{try {
+      const initial = await loadState(); setState(initial); setActiveClientId(initial.clients[0].id);
       setTrade(t => ({...t,clientId:initial.clients[0].id,currency:initial.clients[0].baseCurrency})); setReady(true);
     } catch (e) { setError((e as Error).message); }
-    setLoaded(true);
+    setLoaded(true);})();
   }, []);
 
-  function commit(next: DpmState): boolean {
-    try { const valid = validateState(next); saveState(valid); setState(valid); setError(""); return true; }
+  async function commit(next: DpmState): Promise<boolean> {
+    try { const valid = await saveState(validateState(next)); setState(valid); setError(""); return true; }
     catch (e) { setError((e as Error).message); return false; }
   }
 
-  const symbols = useMemo(() => Array.from(new Set(state.transactions.map((t) => t.symbol.toUpperCase()))).sort(), [state.transactions]);
+  const symbols = useMemo(() => Array.from(new Set(state.transactions.map((t) => (state.controls?.securities.find(s=>s.id===t.securityId)?.symbol??t.symbol).toUpperCase()))).sort(), [state.transactions,state.controls]);
 
   async function refreshQuotes() {
     const id = ++requestId.current;
@@ -68,7 +70,7 @@ export default function Home() {
       const pairs = new Set<string>();
       for (const t of state.transactions) {
         const base = state.clients.find(c => c.id === t.clientId)?.baseCurrency;
-        const source = data.quotes[t.symbol]?.currency;
+        const source = data.quotes[state.controls?.securities.find(s=>s.id===t.securityId)?.symbol??t.symbol]?.currency;
         if (base && source && base !== source) pairs.add(`${source}${base}=X`);
       }
       const fx = await fetchBatch([...pairs]);
@@ -78,7 +80,7 @@ export default function Home() {
     } catch { if (id === requestId.current) { setQuotes({}); setQuoteStatus("partial"); } }
   }
 
-  const quoteKey = [...new Set(state.transactions.map(t => `${t.symbol}:${state.clients.find(c => c.id === t.clientId)?.baseCurrency}`))].sort().join("|");
+  const quoteKey = [...new Set(state.transactions.map(t => `${state.controls?.securities.find(s=>s.id===t.securityId)?.symbol??t.symbol}:${state.clients.find(c => c.id === t.clientId)?.baseCurrency}`))].sort().join("|");
   useEffect(() => {
     if (!ready) return;
     void refreshQuotes();
@@ -98,15 +100,16 @@ export default function Home() {
 
   function selectClient(id: string) {
     setActiveClientId(id);
-    setTrade((t) => ({ ...t, clientId: id, currency: state.clients.find(c => c.id === id)?.baseCurrency ?? "USD" }));
+    setTrade((t) => ({ ...t, clientId: id, accountId:"", securityId:"", currency: state.clients.find(c => c.id === id)?.baseCurrency ?? "USD" }));
   }
 
-  function addTrade(e: FormEvent) {
+  async function addTrade(e: FormEvent) {
     e.preventDefault();
     const quantity = Number(trade.quantity);
     const price = Number(trade.price);
     if (!trade.clientId || !trade.symbol.trim() || !Number.isFinite(quantity) || !Number.isFinite(price) || quantity <= 0 || price < 0) {setError("Enter a valid client, symbol, positive quantity and non-negative price");return;}
     const tx: Transaction = {
+      ...(trade.accountId?{accountId:trade.accountId}:{}),...(trade.securityId?{securityId:trade.securityId}:{}),
       id: uid("tx"),
       sequence: trade.sequence ? Number(trade.sequence) : maxLedgerSequence(state) + 1,
       currency: trade.currency,
@@ -122,7 +125,7 @@ export default function Home() {
       tradeDate: trade.tradeDate,
       gtnRef: trade.gtnRef.trim() || undefined,
     };
-    if (!commit({ ...state, transactions: [...state.transactions, tx] })) return;
+    if (!await commit({ ...state, transactions: [...state.transactions, tx] })) return;
     setTrade((t) => ({ ...t, symbol: "", name: "", quantity: "", price: "", fees: "0", gtnRef: "", sequence: "" }));
   }
 
@@ -131,8 +134,8 @@ export default function Home() {
     commit({ ...state, transactions: state.transactions.filter(t => t.id !== id) });
   }
 
-  function adoptBook(next: DpmState) {
-    if (!commit(next)) return false;
+  async function adoptBook(next: DpmState) {
+    try { const saved = await saveState(next,{expectedRevision:state.revision ?? 0,recovery:!ready}); setState(saved); setError(""); } catch(e) {setError((e as Error).message);return false;}
     setActiveClientId(next.clients[0].id);
     setTrade(t => ({...t,clientId:next.clients[0].id,currency:next.clients[0].baseCurrency,fxRate:"1"}));
     setReady(true); return true;
@@ -144,12 +147,12 @@ export default function Home() {
     try {
       const imported = await importState(file);
       if (!window.confirm("Replace current book? Download a Backup first. The previous saved book is retained for recovery.")) return;
-      adoptBook(imported);
+      await adoptBook(imported);
     } catch (err) { setError(err instanceof Error ? err.message : "Import failed"); }
     e.target.value = "";
   }
 
-  if (!ready || !active) return <main className="app"><div className="container"><h1>DPM Desk</h1>{loaded ? <><p role="alert">{error}</p><button className="btn" onClick={() => { try { downloadSavedBook(); } catch(e) {setError((e as Error).message);} }}>Download original saved book</button><label className="btn">Restore validated backup<input type="file" accept="application/json" onChange={onImport} hidden/></label><button className="btn" onClick={() => { try { const previous = recoverState(); adoptBook(previous); } catch(e) { setError((e as Error).message); } }}>Recover previous save</button></> : "Loading DPM Desk..."}</div></main>;
+  if (!ready || !active) return <main className="app"><div className="container"><h1>DPM Desk</h1>{loaded ? <><p role="alert">{error}</p><button className="btn" onClick={async () => { try { await downloadSavedBook(); } catch(e) {setError((e as Error).message);} }}>Download original saved book</button><label className="btn">Restore validated backup<input type="file" accept="application/json" onChange={onImport} hidden/></label><button className="btn" onClick={async () => { try { const previous = await recoverState(); await adoptBook(previous); } catch(e) { setError((e as Error).message); } }}>Recover previous save</button></> : "Loading DPM Desk..."}</div></main>;
 
   const clientTrades = orderedTrades(state.transactions.filter(t => t.clientId === active.client.id)).reverse();
 
@@ -158,7 +161,7 @@ export default function Home() {
       <header className="topbar">
         <div className="brand"><div className="brandmark">D</div><div><h1>DPM Desk</h1><div className="muted small">Private portfolio operating workbench</div></div></div>
         <div className="row">
-          <a className="btn" href="/operations">Operations</a>
+          <WorkspaceLinks current="/" />
           <button className="btn" aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} onClick={toggleTheme}>{theme === "dark" ? "Light mode" : "Dark mode"}</button>
           <span className="status"><span className={`dot ${quoteStatus === "partial" ? "off" : ""}`} />{quoteStatus === "loading" ? "Refreshing prices" : quoteStatus === "ok" ? "Latest quotes received" : quoteStatus === "partial" ? "Partial market data" : "Local data ready"}</span>
           <button className="btn ghost" onClick={refreshQuotes}>Refresh</button>
@@ -173,15 +176,15 @@ export default function Home() {
             <button className="btn" onClick={() => setSettings("new")}>+ Client</button>
             <button className="btn" onClick={() => setSettings("edit")}>Edit mandate</button>
             <button className="btn" onClick={() => { try {exportState(state);} catch(e) {setError((e as Error).message);} }}>Backup</button>
-            <button className="btn" onClick={() => {try { const previous = recoverState(); if (window.confirm("Recover previous saved book?")) adoptBook(previous); } catch(e) {setError((e as Error).message);} }}>Recover previous</button>
-            <button className="btn danger" onClick={() => {if(window.confirm("Reset to demo? Back up first. Your previous saved book is retained for recovery.")) {try {resetState(); const next=loadState(); setState(next); setActiveClientId(next.clients[0].id); setTrade(t=>({...t,clientId:next.clients[0].id,currency:next.clients[0].baseCurrency,fxRate:"1"}));} catch(e) {setError((e as Error).message);}}}}>Reset demo</button>
+            <button className="btn" onClick={async () => {try { const previous = await recoverState(); if (window.confirm("Recover previous saved book?")) adoptBook(previous); } catch(e) {setError((e as Error).message);} }}>Recover previous</button>
+            <button className="btn danger" onClick={async () => {if(window.confirm("Reset to demo? Back up first. Your previous saved book is retained for recovery.")) {try {const next=await resetState(state.revision ?? 0); setState(next); setActiveClientId(next.clients[0].id); setTrade(t=>({...t,clientId:next.clients[0].id,currency:next.clients[0].baseCurrency,fxRate:"1"}));} catch(e) {setError((e as Error).message);}}}}>Reset demo</button>
             <label className="btn">Restore<input type="file" accept="application/json" onChange={onImport} style={{display:"none"}} /></label>
           </div>
         </div>
 
         {error && <div className="notice negative" role="alert">{error}</div>}
         <div className="row client-selector"><label htmlFor="active-client">Active client</label><select id="active-client" value={active.client.id} onChange={e => selectClient(e.target.value)}>{state.clients.map(c => <option key={c.id} value={c.id}>{c.code}  /  {c.baseCurrency}</option>)}</select><span className="muted small">Book totals below include {active.client.baseCurrency} portfolios only.</span></div>
-        {settings && <MandateForm key={settings + active.client.id} state={state} client={settings === "edit" ? active.client : undefined} onClose={() => setSettings(null)} onSave={(next,id) => {if(!commit(next))return false; setActiveClientId(id); setTrade(t=>({...t,clientId:id,currency:next.clients.find(c=>c.id===id)!.baseCurrency}));setSettings(null);return true;}}/>}
+        {settings && <MandateForm key={settings + active.client.id} state={state} client={settings === "edit" ? active.client : undefined} onClose={() => setSettings(null)} onSave={async (next,id) => {if(next.controls){const client=next.clients.find(c=>c.id===id)!;const accounts=next.controls.accounts.filter(a=>a.clientId===id);if(accounts.length===0)next={...next,controls:{...next.controls!,accounts:[...next.controls!.accounts,{id:`account:${id}`,clientId:id,label:client.code,custodian:"Unspecified",baseCurrency:client.baseCurrency,initialCash:client.initialCash}]}};if(accounts.length===1)next={...next,controls:{...next.controls!,accounts:next.controls!.accounts.map(a=>a.clientId===id?{...a,baseCurrency:client.baseCurrency,initialCash:client.initialCash}:a)}};}if(!await commit(next))return false; setActiveClientId(id); setTrade(t=>({...t,clientId:id,currency:next.clients.find(c=>c.id===id)!.baseCurrency}));setSettings(null);return true;}}/>}
         {!sameCurrency.every(p => p.valuationComplete) && <div className="notice" role="status">Indicative valuation: some holdings use cost or stale prices. P&amp;L, allocations and rebalance values may be incomplete. Review each holding below.</div>}
         <section className="grid kpis">
           <Kpi label={`${sameCurrency.every(p => p.valuationComplete) ? "AUM" : "Indicative AUM"} (${active.client.baseCurrency})`} value={money.format(aum)} />
@@ -215,7 +218,9 @@ export default function Home() {
 
         {tab === "trades" && <div className="grid two">
           <section className="card"><div className="section-title"><h2>Capture execution</h2><span className="pill">GTN reference optional</span></div><form className="form-grid" onSubmit={addTrade}>
-            <Field label="Client"><select value={trade.clientId} onChange={(e)=>setTrade({...trade,clientId:e.target.value,currency:state.clients.find(c=>c.id===e.target.value)?.baseCurrency ?? "USD",fxRate:"1"})}>{state.clients.map(c=><option key={c.id} value={c.id}>{c.code}</option>)}</select></Field>
+            <Field label="Client"><select value={trade.clientId} onChange={(e)=>setTrade({...trade,clientId:e.target.value,accountId:"",securityId:"",currency:state.clients.find(c=>c.id===e.target.value)?.baseCurrency ?? "USD",fxRate:"1"})}>{state.clients.map(c=><option key={c.id} value={c.id}>{c.code}</option>)}</select></Field>
+            <Field label="Account"><select value={trade.accountId} onChange={e=>setTrade({...trade,accountId:e.target.value})}><option value="">Primary account</option>{state.controls?.accounts.filter(a=>a.clientId===trade.clientId).map(a=><option key={a.id} value={a.id}>{a.label}</option>)}</select></Field>
+            <Field label="Security Master instrument"><select value={trade.securityId} onChange={e=>{const security=state.controls?.securities.find(s=>s.id===e.target.value);setTrade({...trade,securityId:e.target.value,...(security?{symbol:security.symbol,name:security.name,currency:security.currency,assetClass:security.assetClass}:{})});}}><option value="">Resolve from symbol / currency</option>{state.controls?.securities.map(s=><option key={s.id} value={s.id}>{s.name} / {s.exchange} / {s.currency}</option>)}</select></Field>
             <Field label="Side"><select value={trade.side} onChange={(e)=>setTrade({...trade,side:e.target.value as Side})}><option>BUY</option><option>SELL</option></select></Field>
             <Field label="Symbol"><input required value={trade.symbol} onChange={(e)=>setTrade({...trade,symbol:e.target.value})} placeholder="NVDA" /></Field>
             <Field label="Asset class"><select value={trade.assetClass} onChange={(e)=>setTrade({...trade,assetClass:e.target.value as AssetClass})}>{ASSET_CLASSES.filter(x=>x!=="Cash").map(x=><option key={x}>{x}</option>)}</select></Field>
@@ -245,5 +250,5 @@ function Metric({label,value}:{label:string;value:string}) { return <tr><td clas
 function HoldingsTable({holdings,quotes,baseCurrency}:{baseCurrency:string;holdings:ReturnType<typeof buildPortfolio>["holdings"];quotes:Record<string,Quote>}) {
   const money = moneyFor(baseCurrency);
   if (!holdings.length) return <div className="empty">No open positions</div>;
-  return <table><thead><tr><th>Security</th><th>Class</th><th className="right">Qty</th><th className="right">Avg cost</th><th className="right">Price</th><th className="right">Value</th><th className="right">Weight</th><th className="right">Unreal. P&L</th><th className="right">Day</th></tr></thead><tbody>{holdings.map(h=>{const q=quotes[h.symbol];return <tr key={h.symbol}><td><strong className="mono">{h.symbol}</strong>{h.name&&<div className="muted small">{h.name}</div>}</td><td>{h.assetClass}</td><td className="right">{num.format(h.quantity)}</td><td className="right">{num.format(h.averageCost)}</td><td className="right">{num.format(h.marketPrice)}<div className="muted small">{baseCurrency}  /  {h.valuationStatus === "cost" ? "COST ONLY" : h.valuationStatus === "stale" ? "STALE" : "Market quote"}</div><div className="muted small">{h.valuationNote}</div>{q && <div className="muted small">{q.currency}  /  {new Date(q.asOf).toLocaleString()}</div>}</td><td className="right">{money.format(h.marketValue)}</td><td className="right">{h.weight.toFixed(1)}%</td><td className={`right ${h.unrealisedPnl>=0?"positive":"negative"}`}>{h.valuationStatus === "cost" ? "Unavailable" : money.format(h.unrealisedPnl)}</td><td className={`right ${(q?.changePct??0)>=0?"positive":"negative"}`}>{h.valuationStatus !== "cost" && q?.changePct!=null?pct(q.changePct):"-"}</td></tr>})}</tbody></table>;
+  return <table><thead><tr><th>Security</th><th>Class</th><th className="right">Qty</th><th className="right">Avg cost</th><th className="right">Price</th><th className="right">Value</th><th className="right">Weight</th><th className="right">Unreal. P&L</th><th className="right">Day</th></tr></thead><tbody>{holdings.map(h=>{const q=quotes[h.securityId??""]??quotes[h.symbol];return <tr key={`${h.accountId??""}:${h.securityId??h.symbol}`}><td><strong className="mono">{h.symbol}</strong>{h.name&&<div className="muted small">{h.name}</div>}</td><td>{h.assetClass}</td><td className="right">{num.format(h.quantity)}</td><td className="right">{num.format(h.averageCost)}</td><td className="right">{num.format(h.marketPrice)}<div className="muted small">{baseCurrency}  /  {h.valuationStatus === "cost" ? "COST ONLY" : h.valuationStatus === "stale" ? "STALE" : h.priceSource?.startsWith("Manual:") ? "Manual override" : "Market quote"}</div><div className="muted small">{h.valuationNote}</div>{h.priceSource&&<div className="muted small">{h.priceSource} / {h.priceAsOf&&new Date(h.priceAsOf).toLocaleString()}</div>}{q && <div className="muted small">{q.currency}  /  {new Date(q.asOf).toLocaleString()}</div>}</td><td className="right">{money.format(h.marketValue)}</td><td className="right">{h.weight.toFixed(1)}%</td><td className={`right ${h.unrealisedPnl>=0?"positive":"negative"}`}>{h.valuationStatus === "cost" ? "Unavailable" : money.format(h.unrealisedPnl)}</td><td className={`right ${(h.priceChangePct??0)>=0?"positive":"negative"}`}>{h.valuationStatus !== "cost" && h.priceChangePct!=null?pct(h.priceChangePct):"-"}</td></tr>})}</tbody></table>;
 }

@@ -13,7 +13,7 @@ describe("benchmark parsing",()=>{
 
 describe("historical TWR",()=>{
   it("calculates return from historical portfolio value",()=>{
-    const series=[h("X","USD",[["2026-01-02",50],["2026-01-05",60]]),h("SPY","USD",[["2026-01-02",100],["2026-01-05",110]])];
+    const series=[h("X","USD",[["2026-01-02",50],["2026-01-05",60]]),h("SPY","USD",[["2026-01-01",100],["2026-01-02",100],["2026-01-05",110]])];
     const r=calculatePerformance(base,base.clients[0],series,"2026-01-02","2026-01-05");
     expect(r.twrPct).toBeCloseTo(10);expect(r.benchmarkPct).toBeCloseTo(10);expect(r.excessPct).toBeCloseTo(0);expect(r.endValue).toBeCloseTo(1100);
   });
@@ -39,11 +39,10 @@ describe("historical TWR",()=>{
     expect(r.startValue).toBeCloseTo(1500);expect(r.externalFlows).toBe(0);expect(r.twrPct).toBeCloseTo(0);
   });
 
-  it("carries a flow across a skipped valuation instead of turning it into return",()=>{
+  it("rejects missing flow-date valuation instead of fabricating performance",()=>{
     const s:DpmState={...base,transactions:[{...base.transactions[0],sequence:2,quantity:10,price:100,tradeDate:"2026-01-05"}],cashMovements:[{id:"m1",clientId:"c1",sequence:1,kind:"DEPOSIT",amount:500,currency:"USD",fxRate:1,movementDate:"2026-01-05"}]};
     const series=[h("X","USD",[["2026-01-06",100],["2026-01-07",100]]),h("SPY","USD",[["2026-01-05",100],["2026-01-06",100],["2026-01-07",100]])];
-    const r=calculatePerformance(s,s.clients[0],series,"2026-01-05","2026-01-07");
-    expect(r.externalFlows).toBeCloseTo(500);expect(r.startValue).toBeCloseTo(1000);expect(r.endValue).toBeCloseTo(1500);expect(r.twrPct).toBeCloseTo(0);expect(r.points[0].externalFlow).toBeCloseTo(500);
+    expect(()=>calculatePerformance(s,s.clients[0],series,"2026-01-05","2026-01-07")).toThrow(/Incomplete portfolio valuation/);
   });
 
   it("treats same-day funding as beginning capital when it is invested before the close",()=>{
@@ -62,7 +61,7 @@ describe("historical TWR",()=>{
 
   it("uses raw closes for a split portfolio and adjusted closes for its benchmark",()=>{
     const s:DpmState={...base,clients:[{...base.clients[0],initialCash:1000}],transactions:[{...base.transactions[0],quantity:10,price:100,tradeDate:"2026-01-02"}],corporateActions:[{id:"a1",clientId:"c1",sequence:2,kind:"SPLIT",symbol:"X",actionDate:"2026-01-05",factor:2}]};
-    const series=[ha("X","USD",[["2026-01-02",100,50],["2026-01-05",50,50]]),ha("SPY","USD",[["2026-01-02",100,50],["2026-01-05",50,50]])];
+    const series=[ha("X","USD",[["2026-01-02",100,50],["2026-01-05",50,50]]),ha("SPY","USD",[["2026-01-01",100,50],["2026-01-02",100,50],["2026-01-05",50,50]])];
     const r=calculatePerformance(s,s.clients[0],series,"2026-01-02","2026-01-05");
     expect(r.endValue).toBeCloseTo(1000);expect(r.twrPct).toBeCloseTo(0);expect(r.benchmarkPct).toBeCloseTo(0);
   });

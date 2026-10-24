@@ -3,15 +3,15 @@ import { FormEvent, useState } from "react";
 import { ASSET_CLASSES } from "@/lib/validation";
 import { Client, DpmState } from "@/lib/types";
 
-export function MandateForm({ state, client, onSave, onClose }: { state: DpmState; client?: Client; onSave: (state: DpmState, id: string) => boolean; onClose: () => void }) {
+export function MandateForm({ state, client, onSave, onClose }: { state: DpmState; client?: Client; onSave: (state: DpmState, id: string) => Promise<boolean>; onClose: () => void }) {
   const [draft, setDraft] = useState<Client>(client ?? { id: crypto.randomUUID(), code: "", label: "", baseCurrency: "USD", benchmark: "SPY", riskProfile: "Balanced", initialCash: 0 });
   const [targets, setTargets] = useState(ASSET_CLASSES.map(assetClass => state.targets.find(t => t.clientId === client?.id && t.assetClass === assetClass) ?? { clientId: draft.id, assetClass, targetPct: assetClass === "Cash" && !client ? 100 : 0, minPct: 0, maxPct: 100 }));
   const hasActivity = state.transactions.some(t => t.clientId === draft.id) || state.cashMovements.some(m => m.clientId === draft.id) || state.corporateActions.some(a => a.clientId === draft.id);
   const total = targets.reduce((sum,t) => sum + t.targetPct, 0);
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
     const next = { ...state, clients: client ? state.clients.map(c => c.id === draft.id ? draft : c) : [...state.clients, draft], targets: [...state.targets.filter(t => t.clientId !== draft.id), ...targets] };
-    onSave(next, draft.id);
+    await onSave(next, draft.id);
   }
   return <section className="card settings" aria-labelledby="mandate-title">
     <div className="section-title"><h2 id="mandate-title">{client ? "Edit mandate" : "New client mandate"}</h2><button className="btn" onClick={onClose}>Close</button></div>

@@ -65,7 +65,7 @@ describe("portfolio ledger and valuation",()=>{
 });
 
 describe("validated and versioned state",()=>{
-  it("migrates legacy sequence and adds v3 ledgers",()=>{const s:any=state([trade("BUY",1,100)]);delete s.version;delete s.transactions[0].sequence;delete s.cashMovements;delete s.corporateActions;expect(validateState(s)).toMatchObject({version:3,transactions:[{sequence:1}],cashMovements:[],corporateActions:[]});});
+  it("migrates legacy sequence and adds v3 ledgers",()=>{const s:any=state([trade("BUY",1,100)]);delete s.version;delete s.transactions[0].sequence;delete s.cashMovements;delete s.corporateActions;expect(validateState(s)).toMatchObject({version:4,transactions:[{sequence:1}],cashMovements:[],corporateActions:[]});});
   it.each([NaN,Infinity,-1,0])("rejects bad quantity %s",n=>expect(()=>validateState(state([trade("BUY",n,100)]))).toThrow());
   it.each([-1,NaN,Infinity])("rejects bad fees %s",fees=>expect(()=>validateState(state([trade("BUY",1,100,1,{fees})]))).toThrow());
   it("rejects non-positive FX",()=>expect(()=>validateState(state([trade("BUY",1,100,1,{fxRate:0})]))).toThrow());
