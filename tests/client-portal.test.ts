@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildClientPortalSnapshot } from "../lib/client-portal";
 import {
   signClientPortalSnapshot,
@@ -140,6 +140,14 @@ function snapshot() {
   });
 }
 
+function signingKeys() {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  return {
+    privatePem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+    publicPem: publicKey.export({ type: "spki", format: "pem" }).toString(),
+  };
+}
+
 describe("client portal publish layer", () => {
   it("publishes only the selected account and omits client/account labels", () => {
     const s = snapshot();
@@ -162,6 +170,94 @@ describe("client portal publish layer", () => {
     expect(s.priceLineage[0].selected).toContain("Test feed");
   });
 
+  it("preserves full security-master ticker ambiguity while publishing one account", () => {
+    const state = book();
+    state.controls!.securities.push({
+      id: "sx-other",
+      symbol: "X",
+      name: "Different X instrument",
+      exchange: "OTHER",
+      currency: "USD",
+      assetClass: "US Equity",
+      priceMultiplier: 1,
+      shariaStatus: "unknown",
+    });
+    const s = buildClientPortalSnapshot({
+      state,
+      clientId: "c1",
+      accountId: "a1",
+      quotes: { X: quote("X", 120) },
+      snapshotId: "snap-ambiguous",
+      publishedAt,
+    });
+    expect(s.nav).toBe(1000);
+    expect(s.holdings[0]).toMatchObject({
+      securityId: "sx",
+      marketPrice: 100,
+      valuationStatus: "cost",
+    });
+    expect(s.priceLineage).toEqual([
+      expect.objectContaining({ securityId: "sx", selected: "unavailable" }),
+    ]);
+  });
+
+  it("excludes future ledger events from a historical snapshot", () => {
+    const state = book();
+    state.cashMovements.push({
+      id: "future-deposit",
+      accountId: "a1",
+      clientId: "c1",
+      sequence: 3,
+      kind: "DEPOSIT",
+      amount: 500,
+      currency: "USD",
+      fxRate: 1,
+      movementDate: "2026-11-01",
+    });
+    const s = buildClientPortalSnapshot({
+      state,
+      clientId: "c1",
+      accountId: "a1",
+      quotes: { sx: quote("X", 120) },
+      snapshotId: "snap-cutoff",
+      publishedAt,
+    });
+    expect(s.nav).toBe(1040);
+    expect(s.cash).toBe(800);
+  });
+
+  it("uses publishedAt instead of wall-clock time for valuation staleness", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-24T10:00:00.000Z"));
+      const first = snapshot();
+      vi.setSystemTime(new Date("2026-10-30T10:00:00.000Z"));
+      const second = snapshot();
+      expect(first.holdings[0].valuationStatus).toBe("live");
+      expect(second.holdings[0].valuationStatus).toBe("live");
+      expect(second).toEqual(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not classify a quote after publishedAt as live", () => {
+    const futureQuote = {
+      ...quote("X", 120),
+      asOf: "2026-10-25T10:00:00.000Z",
+    };
+    const s = buildClientPortalSnapshot({
+      state: book(),
+      clientId: "c1",
+      accountId: "a1",
+      quotes: { sx: futureQuote },
+      snapshotId: "snap-future-quote",
+      publishedAt,
+    });
+    expect(s.holdings[0].valuationStatus).toBe("stale");
+    expect(s.valuationComplete).toBe(false);
+  });
+
   it("refuses publishing if client ledger events are not bound to an account", () => {
     const state = book();
     state.transactions[0] = { ...state.transactions[0], accountId: undefined };
@@ -177,20 +273,21 @@ describe("client portal publish layer", () => {
     ).toThrow(/every client ledger event/);
   });
 
-  it("signs snapshots with Ed25519 and detects payload tampering", () => {
-    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  it("signs payload and key metadata with Ed25519 and detects tampering", () => {
+    const { privatePem, publicPem } = signingKeys();
     const envelope = signClientPortalSnapshot(
       snapshot(),
-      privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+      privatePem,
       "office-key-2026-01",
     );
-    const publicPem = publicKey.export({ type: "spki", format: "pem" }).toString();
     expect(verifyClientPortalSnapshot(envelope, publicPem)).toBe(true);
-    const tampered = {
+    const payloadTampered = {
       ...envelope,
       payload: { ...envelope.payload, nav: envelope.payload.nav + 1 },
     };
-    expect(verifyClientPortalSnapshot(tampered, publicPem)).toBe(false);
+    expect(verifyClientPortalSnapshot(payloadTampered, publicPem)).toBe(false);
+    const keyIdTampered = { ...envelope, keyId: "attacker-key" };
+    expect(verifyClientPortalSnapshot(keyIdTampered, publicPem)).toBe(false);
   });
 
   it("issues short-lived statement access tokens and rejects expiry/tampering", () => {
@@ -214,17 +311,25 @@ describe("client portal publish layer", () => {
     expect(() => verifyPortalStatementAccessToken(`${token}x`, secret, 1500)).toThrow();
   });
 
-  it("renders a self-contained statement carrying the integrity digest", () => {
-    const { privateKey } = generateKeyPairSync("ed25519");
+  it("verifies the envelope before rendering a statement", () => {
+    const { privatePem, publicPem } = signingKeys();
     const envelope = signClientPortalSnapshot(
       snapshot(),
-      privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+      privatePem,
       "office-key-2026-01",
     );
-    const html = renderClientStatementHtml(envelope);
+    const html = renderClientStatementHtml(envelope, publicPem);
     expect(html).toContain("Discretionary Portfolio Statement");
     expect(html).toContain(envelope.contentDigest);
     expect(html).toContain("C-0001");
     expect(html).not.toContain("Sensitive Client Name");
+
+    const tampered = {
+      ...envelope,
+      payload: { ...envelope.payload, nav: envelope.payload.nav + 999 },
+    };
+    expect(() => renderClientStatementHtml(tampered, publicPem)).toThrow(
+      /valid signed portal snapshot/,
+    );
   });
 });
