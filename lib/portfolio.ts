@@ -178,7 +178,7 @@ export function aggregateAum(summaries: PortfolioSummary[]) {
   return summaries.reduce((sum, p) => sum + p.marketValue, 0);
 }
 
-export function buildPortfolio(client:Client,state:DpmState,quotes:Record<string,Quote>):PortfolioSummary {
-  const view=bookView(state,selectPrices(state,quotes).quotes);const result=buildPortfolioCore(client,view.state,view.quotes);
+export function buildPortfolio(client:Client,state:DpmState,quotes:Record<string,Quote>,asOf=new Date().toISOString()):PortfolioSummary {
+  const view=bookView(state,selectPrices(state,quotes,asOf).quotes);const result=buildPortfolioCore(client,view.state,view.quotes);
   return {...result,holdings:result.holdings.map(h=>({...h,...view.labels.get(h.symbol)}))};
 }
