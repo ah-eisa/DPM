@@ -15,7 +15,8 @@ function movementDelta(m: CashMovement) {
 function buildPortfolioCore(
   client: Client,
   state: DpmState,
-  quotes: Record<string, Quote>
+  quotes: Record<string, Quote>,
+  asOfMs: number,
 ): PortfolioSummary {
   const cashMovements = state.cashMovements ?? [];
   const corporateActions = state.corporateActions ?? [];
@@ -89,7 +90,11 @@ function buildPortfolioCore(
     const fx = quoteCurrency === client.baseCurrency ? undefined : quotes[`${quoteCurrency}${client.baseCurrency}=X`];
     const currencyMatches = !meta.currency || meta.currency === quoteCurrency;
     const hasPrice = currencyMatches && !!quoteCurrency && Number.isFinite(quote?.price) && quote.price >= 0 && (quoteCurrency === client.baseCurrency || (!!fx && Number.isFinite(fx.price) && fx.price > 0)) && Number.isFinite(quantity * quote.price * (fx?.price ?? 1));
-    const stale = quote?.stale || fx?.stale || [quote, fx].some(q => q && (!Number.isFinite(Date.parse(q.asOf)) || Date.now() - Date.parse(q.asOf) > 24 * 60 * 60 * 1000));
+    const stale = quote?.stale || fx?.stale || [quote, fx].some((q) => {
+      if (!q) return false;
+      const quoteTime = Date.parse(q.asOf);
+      return !Number.isFinite(quoteTime) || quoteTime > asOfMs || asOfMs - quoteTime > 24 * 60 * 60 * 1000;
+    });
     rawHoldings.push({
       symbol,
       priceSource: hasPrice ? quote.source : undefined,
@@ -179,6 +184,8 @@ export function aggregateAum(summaries: PortfolioSummary[]) {
 }
 
 export function buildPortfolio(client:Client,state:DpmState,quotes:Record<string,Quote>,asOf=new Date().toISOString()):PortfolioSummary {
-  const view=bookView(state,selectPrices(state,quotes,asOf).quotes);const result=buildPortfolioCore(client,view.state,view.quotes);
+  const asOfMs = Date.parse(asOf);
+  if (!Number.isFinite(asOfMs)) throw new Error("Portfolio asOf must be a valid timestamp");
+  const view=bookView(state,selectPrices(state,quotes,asOf).quotes);const result=buildPortfolioCore(client,view.state,view.quotes,asOfMs);
   return {...result,holdings:result.holdings.map(h=>({...h,...view.labels.get(h.symbol)}))};
 }
