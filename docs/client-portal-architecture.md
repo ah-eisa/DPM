@@ -29,9 +29,11 @@ The snapshot is versioned independently from the DPM book schema so the portal c
 
 ## Deterministic valuation
 
-`publishedAt` is the explicit valuation reference time for portal snapshots. Current-price staleness is evaluated against that timestamp, not the server or browser wall clock. Quotes dated after `publishedAt` are not classified as live.
+`publishedAt` is the explicit valuation reference time for portal snapshots. Current-price age is evaluated against that timestamp, not the server or browser wall clock. A market or FX quote timestamp that is invalid or later than `publishedAt` is not eligible for valuation at all; the holding falls back to indicative FIFO cost rather than using future information in NAV.
 
-This makes repeated generation from the same book, quotes and snapshot timestamp deterministic even if the process runs later.
+Manual override effective, expiry and recorded timestamps are parsed as instants and compared numerically. Equivalent representations such as `08:00Z` and `12:00+04:00` therefore produce the same override selection and valuation.
+
+This makes repeated generation from the same book, quotes and snapshot timestamp deterministic even if the process runs later or uses an equivalent timezone representation.
 
 ## Integrity model
 
