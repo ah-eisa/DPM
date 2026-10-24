@@ -23,3 +23,10 @@ Fee support is a bounded Actual/365 estimate only. Automatic billing, high-water
 Automated coverage includes migrated FIFO/cash/P&L, account isolation, same-ticker instrument ambiguity, split scope, percentage-of-par multipliers, duplicate CSV, historical scope, native foreign-cash not-comparable handling, clean/dirty value compatibility, override expiry/zero/currency, group double counting, formula-safe export, encrypted v4 round trips, IDB concurrency and atomic failure rollback. Run tests, lint, TypeScript, production build and audit before publishing.
 
 Browser checks use synthetic state on a separate localhost origin. Account creation, accepted observation preview, grouping/reporting, reload persistence, change history, navigation and light/dark 390px layouts were checked. This does not assert live authenticated provider availability or Arabic/RTL support. Reload all old application tabs on upgrade and keep an exported backup for rollback to the old application; old code writes only the preserved legacy store.
+
+
+## Post-review integrity hardening
+
+Legacy per-collection sequence collisions now migrate deterministically before v4 validation, with a complete old/new mapping in the book and untouched original JSON preserved. Within-collection invalid counters and every v4 global collision still fail. This path covers initial loading, JSON imports and encrypted legacy restores.
+
+Local history now retains at most 100 newest entries and 20 MiB. Pruning, the revision update, the book and the new change event share one transaction; a failure rolls pruning back too. Manual pruning requires exporting a fresh snapshot and confirming the file was saved; a revision lease rejects concurrent unseen writes. Original migration and previous-book metadata remain separate. Tests cover counter collisions, funding-before-trade/split order, retained mapping, failed migration rollback, both retention limits, v1-IDB history upgrade and failed pruning rollback.

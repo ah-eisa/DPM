@@ -72,7 +72,7 @@ describe("validated and versioned state",()=>{
   it("rejects same-currency FX inconsistency",()=>expect(()=>validateState(state([trade("BUY",1,100,1,{fxRate:2})]))).toThrow());
   it("rejects duplicate IDs",()=>expect(()=>validateState(state([trade("BUY",1,100),trade("BUY",1,100)]))).toThrow());
   it("rejects duplicate transaction sequence",()=>expect(()=>validateState(state([trade("BUY",1,100),trade("BUY",1,100,1,{id:"other"})]))).toThrow());
-  it("rejects sequence values that overlap across ledger event types",()=>expect(()=>validateState(state([trade("BUY",1,100,1)],[cashMove("DEPOSIT",100,1)])).version).toThrow(/globally unique/));
+  it("rejects sequence values that overlap across ledger event types",()=>expect(()=>validateState({...state([trade("BUY",1,100,1)],[cashMove("DEPOSIT",100,1)]),version:4,controls:validateState(state()).controls}).version).toThrow(/globally unique/));
   it("rejects unknown clients",()=>expect(()=>validateState(state([trade("BUY",1,100,1,{clientId:"unknown"})]))).toThrow());
   it("rejects impossible dates",()=>expect(()=>validateState(state([trade("BUY",1,100,1,{tradeDate:"2026-02-30"})]))).toThrow());
   it("rejects invalid records even with valid array containers",()=>expect(()=>validateState({clients:[{}],transactions:[],cashMovements:[],corporateActions:[],targets:[]})).toThrow());

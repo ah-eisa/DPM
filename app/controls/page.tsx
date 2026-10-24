@@ -3,7 +3,13 @@
 import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 import { WorkspaceLinks } from "../workspace-links";
 import { loadState, saveState, downloadSavedBook } from "@/lib/storage";
-import { bookHistory, readBookMeta } from "@/lib/book-store";
+import {
+  bookHistory,
+  readBookMeta,
+  pruneBookHistory,
+  HISTORY_MAX_ENTRIES,
+  HISTORY_MAX_BYTES,
+} from "@/lib/book-store";
 import { validateState, ASSET_CLASSES } from "@/lib/validation";
 import {
   addAccount,
@@ -79,6 +85,8 @@ export default function ControlsPage() {
   const [status, setStatus] = useState("");
   const [pending, setPending] = useState(false);
   const [history, setHistory] = useState<BookChange[]>([]);
+  const [historyExportRevision, setHistoryExportRevision] = useState<number>();
+  const [historyExportConfirmed, setHistoryExportConfirmed] = useState(false);
   const [preview, setPreview] = useState<CustodianObservation>();
   const [fileText, setFileText] = useState("");
   const [accountId, setAccountId] = useState("");
@@ -1129,20 +1137,90 @@ export default function ControlsPage() {
             <p className="muted">
               Book and change event commit atomically. Local operator identity
               is unverified. Full before/after states are retained for
-              inspection; this browser log is not tamper-proof.
+              inspection, bounded to the newest {HISTORY_MAX_ENTRIES} revisions
+              and at most {HISTORY_MAX_BYTES / 1024 / 1024} MiB (whichever is
+              reached first). Older entries roll off automatically during saves.
+              Export regularly before they roll off; this browser log is not
+              tamper-proof.
             </p>
+            {book.sequenceMigration && (
+              <p className="notice">
+                Legacy v{book.sequenceMigration.sourceVersion} sequencing was
+                migrated using date → old sequence → event priority → stable ID.{" "}
+                {book.sequenceMigration.mapping.length} events are recorded in
+                the mapping.{" "}
+                <button
+                  className="btn"
+                  onClick={() =>
+                    download(
+                      "dpm-sequence-migration.json",
+                      JSON.stringify(book.sequenceMigration, null, 2),
+                      "application/json",
+                    )
+                  }
+                >
+                  Export sequence mapping
+                </button>
+              </p>
+            )}
             <div className="row">
               <button
                 className="btn"
                 onClick={() =>
-                  download(
-                    "dpm-local-history.json",
-                    JSON.stringify(history, null, 2),
-                    "application/json",
-                  )
+                  run(async () => {
+                    const fresh = await bookHistory();
+                    download(
+                      "dpm-local-history.json",
+                      JSON.stringify(fresh, null, 2),
+                      "application/json",
+                    );
+                    setHistory(fresh);
+                    setHistoryExportRevision(fresh[0]?.revisionAfter);
+                    setHistoryExportConfirmed(false);
+                    setStatus(
+                      "History download started. Save the file, then confirm before pruning.",
+                    );
+                  })
                 }
               >
                 Export history
+              </button>
+              <label className="row">
+                <input
+                  type="checkbox"
+                  checked={historyExportConfirmed}
+                  disabled={historyExportRevision === undefined}
+                  onChange={(e) => setHistoryExportConfirmed(e.target.checked)}
+                />
+                I saved the exported history file
+              </label>
+              <button
+                className="btn"
+                disabled={
+                  historyExportRevision === undefined ||
+                  !historyExportConfirmed ||
+                  pending
+                }
+                onClick={() =>
+                  run(async () => {
+                    if (
+                      historyExportRevision === undefined ||
+                      !historyExportConfirmed
+                    )
+                      throw Error("Export and save history before pruning");
+                    const result = await pruneBookHistory(
+                      historyExportRevision,
+                    );
+                    setHistory(await bookHistory());
+                    setHistoryExportConfirmed(false);
+                    setHistoryExportRevision(undefined);
+                    setStatus(
+                      `${result.removed} older entries removed; latest revision and book retained.`,
+                    );
+                  })
+                }
+              >
+                Prune exported older history
               </button>
               <button
                 className="btn"
