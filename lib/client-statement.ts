@@ -1,4 +1,7 @@
-import type { SignedClientPortalSnapshotV1 } from "./portal-signing";
+import {
+  verifyClientPortalSnapshot,
+  type SignedClientPortalSnapshotV1,
+} from "./portal-signing";
 
 function escapeHtml(value: unknown) {
   return String(value ?? "")
@@ -23,7 +26,11 @@ function pct(value: number | undefined) {
 
 export function renderClientStatementHtml(
   envelope: SignedClientPortalSnapshotV1,
+  trustedPublicKeyPem: string,
 ) {
+  if (!verifyClientPortalSnapshot(envelope, trustedPublicKeyPem))
+    throw new Error("Client statement requires a valid signed portal snapshot");
+
   const s = envelope.payload;
   const holdings = s.holdings
     .map(
