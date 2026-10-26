@@ -1,0 +1,74 @@
+{
+  "schema": "dpm.client-portal.snapshot",
+  "version": "1.0",
+  "snapshotId": "synthetic-snapshot-1",
+  "publishedAt": "2026-10-24T10:00:00Z",
+  "bookRevision": 7,
+  "clientCode": "SYNTHETIC-1",
+  "accountId": "a",
+  "baseCurrency": "USD",
+  "benchmark": "SPY",
+  "riskProfile": "Balanced",
+  "nav": 1100,
+  "cash": 600,
+  "investedValue": 500,
+  "realisedPnl": 0,
+  "incomePnl": 0,
+  "unrealisedPnl": 100,
+  "totalPnl": 100,
+  "dayPnl": 20,
+  "dayPnlComplete": true,
+  "valuationComplete": true,
+  "allocation": {
+    "US Equity": 45.45454545454545,
+    "Cash": 54.54545454545454
+  },
+  "holdings": [
+    {
+      "securityId": "sec",
+      "symbol": "ACME",
+      "name": "Synthetic company",
+      "assetClass": "US Equity",
+      "quantity": 2,
+      "averageCost": 200,
+      "costBasis": 400,
+      "marketPrice": 250,
+      "marketValue": 500,
+      "realisedPnl": 0,
+      "unrealisedPnl": 100,
+      "totalPnl": 100,
+      "weightPct": 45.45454545454545,
+      "valuationStatus": "live",
+      "priceSource": "Synthetic test feed",
+      "priceAsOf": "2026-10-24T09:59:00.000Z"
+    }
+  ],
+  "drift": [
+    {
+      "assetClass": "US Equity",
+      "targetPct": 0,
+      "minPct": 0,
+      "maxPct": 0,
+      "actualPct": 45.45454545454545,
+      "driftPct": 45.45454545454545,
+      "breach": true
+    },
+    {
+      "assetClass": "Cash",
+      "targetPct": 0,
+      "minPct": 0,
+      "maxPct": 0,
+      "actualPct": 54.54545454545454,
+      "driftPct": 54.54545454545454,
+      "breach": true
+    }
+  ],
+  "priceLineage": [
+    {
+      "securityId": "sec",
+      "selected": "Synthetic test feed:2026-10-24T09:59:00.000Z",
+      "rejected": []
+    }
+  ],
+  "warnings": []
+}
