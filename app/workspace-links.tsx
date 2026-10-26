@@ -4,6 +4,7 @@ const links = [
   ["Book controls", "/controls"],
   ["Performance", "/performance"],
   ["Backup", "/backup"],
+  ["Account publishing", "/publish"],
   ["Market access", "/access"],
 ] as const;
 

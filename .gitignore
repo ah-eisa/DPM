@@ -9,3 +9,5 @@ out/
 
 *.tsbuildinfo
 artifacts/
+
+dist-publisher/

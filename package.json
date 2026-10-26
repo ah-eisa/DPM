@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "node scripts/lint.mjs",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:publisher": "tsc -p tsconfig.publisher.json",
+    "publisher": "node scripts/dpm-publisher.mjs"
   },
   "dependencies": {
     "next": "^16.4.3",
