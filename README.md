@@ -1,3 +1,7 @@
+> **Archived experiment — portfolio capabilities now run natively in [WealthGate](https://wealthgateai.com).**
+>
+> As of 27 October 2026, this repository is retained only as historical source and recovery material. New portfolio operations, accounts, FIFO accounting, reconciliation, performance and reporting belong to the unified WealthGate application, with its existing authentication, approvals and database. The standalone application and external publishing workflow are retired. The historical documentation below is preserved for reference.
+
 # DPM Desk
 
 A lightweight, local-first discretionary portfolio management workbench for monitoring multiple client portfolios without replacing the broker/execution terminal.
